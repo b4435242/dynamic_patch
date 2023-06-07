@@ -1,0 +1,14 @@
+#include <stdio.h>
+#include <stdlib.h>
+
+void vulnerable_function() {
+    char buffer[16];
+    printf("Enter your name: ");
+    gets(buffer);
+    printf("Hello, %s!\n", buffer);
+}
+
+int main(int argc, char **argv) {
+    vulnerable_function();
+    return 0;
+}
