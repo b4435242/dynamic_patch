@@ -8,7 +8,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <Python.h>
+//#include <Python.h>
 
 
 LPVOID virtualTextBaseAddress, staticTextBaseAddress, angrTextBaseAddress;
@@ -216,7 +216,7 @@ void dump_stdin_buf(HANDLE& hProcess, LPVOID buf_addr, long long unsigned int bu
 
 
 bool detect_overflow(LPVOID start_addr, LPVOID end_addr, LPVOID base_addr, LPVOID& vulnerable_virtual_addr, LPVOID& stdin_buf_virtual_addr){
-    char py_path[] = "overflow_detect.py";
+    /*char py_path[] = "overflow_detect.py";
     char stack_path[] = "stack";
     char regs_path[] = "registers";
     char start_addr_str[18], end_addr_str[18], base_addr_str[18];
@@ -256,7 +256,23 @@ bool detect_overflow(LPVOID start_addr, LPVOID end_addr, LPVOID base_addr, LPVOI
     PyRun_SimpleFile(fp, py_path);
     fclose(fp);
     Py_Finalize();
+    */
+    char start_addr_str[18], end_addr_str[18], base_addr_str[18];
 
+    sprintf(start_addr_str, "0x%p", start_addr);
+    sprintf(end_addr_str, "0x%p", end_addr);
+    sprintf(base_addr_str, "0x%p", base_addr);
+
+    std::string cmd;
+    cmd += "python overflow_detect.py ";
+    cmd += std::string(exe_path) + " ";
+    cmd += "registers ";
+    cmd += "stack ";
+    cmd += std::string(start_addr_str) + " ";
+    cmd += std::string(end_addr_str) + " ";
+    cmd += std::string(base_addr_str) + " ";
+    int result = system(cmd.c_str());
+    std::cout << cmd << ", ret =" << result << std::endl;
     // Return analysis by reading file //
     std::ifstream file("analysis"); 
     std::string line[3];

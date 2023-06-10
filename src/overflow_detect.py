@@ -20,6 +20,10 @@ class Bof_Aeg(object):
 		self.overflow = True
 		self.vuln_addr = 0
 		self.stdin_buf_addr = 0
+		# Find the address of the `gets()` function in the binary
+		gets_addr = self.project.loader.find_symbol("gets").rebased_addr
+		# Hook the `gets()` function with the default SimProcedure implementation
+		self.project.hook(gets_addr, angr.SIM_PROCEDURES['libc']['gets'])
 
 	def is_unconstrained(self, m, constraints, start_addr):
 		''' Use concretized input which satisfies constraints to check if it can exploit vulnerability '''
