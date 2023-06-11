@@ -8,17 +8,17 @@ execute python-3.11.4-amd64
 mkdir setuptools && pip download setuptools
 pip install --no-index --find-links setuptools setuptools
 
-mkdir cppheaderparser && cd cppheaderparser && pip download CppHeaderParser
-tar -zxvf cppheaderparser\CppHeaderParser-2.7.4.tar.gz --directory cppheaderparser
-cd cppheaderparser\CppHeaderParser-2.7.4 && python setup.py install
+mkdir cppheaderparser && cd cppheaderparser && pip download CppHeaderParser  
+tar -zxvf cppheaderparser\CppHeaderParser-2.7.4.tar.gz --directory cppheaderparser  
+cd cppheaderparser\CppHeaderParser-2.7.4 && python setup.py install  
 
-mkdir mulpyplexer && cd mulpyplexer && pip download mulpyplexer
-tar -zxvf mulpyplexer\mulpyplexer-0.09.tar.gz --directory mulpyplexer
-cd mulpyplexer\mulpyplexer-0.09 && python setup.py install
+mkdir mulpyplexer && cd mulpyplexer && pip download mulpyplexer  
+tar -zxvf mulpyplexer\mulpyplexer-0.09.tar.gz --directory mulpyplexer  
+cd mulpyplexer\mulpyplexer-0.09 && python setup.py install  
 
-mkdir future && cd future && pip download future
-tar -zxvf future\future-0.18.3.tar.gz --directory future
-cd future\future-0.18.3 && python setup.py install
+mkdir future && cd future && pip download future  
+tar -zxvf future\future-0.18.3.tar.gz --directory future  
+cd future\future-0.18.3 && python setup.py install  
 
 mkdir angr && cd angr && pip download angr  
 pip install --no-index --find-links angr angr  
