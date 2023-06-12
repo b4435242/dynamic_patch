@@ -2,28 +2,76 @@ import angr, argparse, sys, IPython
 import claripy
 import load_state
 import struct
+from angr.storage.memory_mixins.address_concretization_mixin import MultiwriteAnnotation
 
 rip_pattern = 0xCCCCCCCC
 
 
 
 
+class angr_gets(angr.SimProcedure):
+	#pylint:disable=arguments-differ
+	def run(self, dst):
+		fd = 0
+		simfd = self.state.posix.get_fd(fd)
+		if simfd is None:
+			return 0
+			
+		max_size = self.state.libc.max_gets_size
 
+		# case 0: the data is concrete. we should read it a byte at a time since we can't seek for
+		# the newline and we don't have any notion of buffering in-memory
+		if simfd.read_storage.concrete:
+			count = 0
+			while count < max_size - 1:
+				data, real_size = simfd.read_data(1)
+				if self.state.solver.is_true(real_size == 0):
+					break
+				self.state.memory.store(dst + count, data)
+				count += 1
+				if self.state.solver.is_true(data == b'\n'):
+					break
+			self.state.memory.store(dst + count, b'\0')
+			return dst
+
+		# case 2: the data is symbolic, the newline could be anywhere. Read the maximum number of bytes
+		# (SHORT_READS should take care of the variable length) and add a constraint to assert the
+		# newline nonsense.
+		# caveat: there could also be no newline and the file could EOF.
+		else:
+			print("[gets] stdin is symbolic")
+			data, real_size = simfd.read_data(max_size)
+
+			for i, byte in enumerate(data.chop(8)):
+				self.state.add_constraints(self.state.solver.If(
+					i+1 != real_size, 
+					byte != b'\n',
+					self.state.solver.Or(            # otherwise one of the following must be true:
+						i+2 == max_size,                 # - we ran out of space, or
+						simfd.eof(),                 # - the file is at EOF, or
+						byte == b'\n'                # - it is a newline
+					)))
+			self.state.add_constraints(byte == b'\n')# gets最后加入\n
+
+			self.state.memory.store(dst, data, size=real_size)
+			end_address = dst + real_size - 1
+			end_address = end_address.annotate(MultiwriteAnnotation())
+			self.state.memory.store(end_address, b'\0')
+			return dst
 
 
 
 class Bof_Aeg(object):
 	def __init__(self, bin, base_addr):
 		# virtual base address
-		self.project = angr.Project(bin, main_opts={'base_addr': base_addr})
+		self.project = angr.Project(bin, main_opts={'base_addr': base_addr}, load_options={'auto_load_libs': False})
+		self.project.hook_symbol('gets',angr_gets())
+
 		self.num_input_chars = 256
 		self.overflow = True
 		self.vuln_addr = 0
 		self.stdin_buf_addr = 0
-		# Find the address of the `gets()` function in the binary
-		gets_addr = self.project.loader.find_symbol("gets").rebased_addr
-		# Hook the `gets()` function with the default SimProcedure implementation
-		self.project.hook(gets_addr, angr.SIM_PROCEDURES['libc']['gets'])
+		
 
 	def is_unconstrained(self, m, constraints, start_addr):
 		''' Use concretized input which satisfies constraints to check if it can exploit vulnerability '''
@@ -62,11 +110,11 @@ class Bof_Aeg(object):
 	def find_minimum_constraints(self, constraints, start_addr): 
 		# Function to extract byte index from constraint name
 		def get_byte_index(constraint):
-		    # Parse the constraint name to extract the byte index
-		    name = str(constraint)
-		    start = name.index('[') + 1
-		    end = name.index(':')
-		    return -int(name[start:end])
+			# Parse the constraint name to extract the byte index
+			name = str(constraint)
+			start = name.index('[') + 1
+			end = name.index(':')
+			return -int(name[start:end])
 
 		# Sort the constraints based on the byte index
 		constraints = sorted(constraints, key=get_byte_index)
@@ -114,22 +162,22 @@ class Bof_Aeg(object):
 		
 		symbolic_input = claripy.BVS('input', self.num_input_chars*8)
 		self.symbolic_input = symbolic_input
-		input_value = "\nhlkk"
-		#arg_var = claripy.BVS('arg_var', 4*8)
-		#input_value = b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x8b\xa5\x1c\xefG\xd8YD\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
 		simfile = angr.SimFile('/dev/stdin', content=symbolic_input)
-		state = self.project.factory.call_state(addr=start_addr, stdin=simfile, add_options={
+		state = self.project.factory.call_state(addr=start_addr, add_options={
 			angr.options.CONSTRAINT_TRACKING_IN_SOLVER,
 			angr.options.SYMBOL_FILL_UNCONSTRAINED_MEMORY,
 			angr.options.SYMBOL_FILL_UNCONSTRAINED_REGISTERS
 			})
+		state.libc.buf_symbolic_bytes = 0x1000
+		state.libc.max_str_len = 0x1000
+		state.libc.max_gets_size = 0x200 # define gets() size; 溢出太长会影响system的envp
 
 		def log_func(s):
 			print("[gets] rcx={}, rsp={}, rbp={}".format(hex(s.solver.eval(s.regs.rcx)), hex(s.solver.eval(s.regs.rsp)),  hex(s.solver.eval(s.regs.rbp))))
 			self.stdin_buf_addr = s.solver.eval(s.regs.rcx)
 			
 
-		state.inspect.b('simprocedure', simprocedure_name='gets', when=angr.BP_BEFORE, action=log_func)
+		state.inspect.b('simprocedure', simprocedure_name='angr_gets', when=angr.BP_BEFORE, action=log_func)
 		#for char in symbolic_input.chop(bits=8):
 		#	state.add_constraints(char >= 'A', char <= 'z')
 
@@ -153,7 +201,7 @@ class Bof_Aeg(object):
 		#input_bvv = claripy.BVV(input_value, len(input_value)*8)
 		#input_bvv = input_bvv.zero_extend((num_input_chars-len(input_value))*8)
 		stdin_constraints = unconstrained_state.solver.constraints
-
+		print(stdin_constraints)
 		minimum_constraints = self.find_minimum_constraints(stdin_constraints, start_addr)
 		self.minimum_constraints = minimum_constraints
 
