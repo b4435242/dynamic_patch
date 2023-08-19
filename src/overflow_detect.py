@@ -5,7 +5,9 @@ import struct
 from angr.storage.memory_mixins.address_concretization_mixin import MultiwriteAnnotation
 from angr.misc.ux import once
 import logging
+
 rip_pattern = 0xCCCCCCCCCCCCCCCC
+
 
 _l = logging.getLogger(name=__name__)
 
@@ -27,7 +29,7 @@ class gets(angr.SimProcedure):
 			return 0
 
 		max_size = self.state.libc.max_gets_size
-		dst=bof_aeg.stdin_buf_addr
+		dst = bof_aeg.stdin_buf_addr
 		# case 0: the data is concrete. we should read it a byte at a time since we can't seek for
 		# the newline and we don't have any notion of buffering in-memory
 		if simfd.read_storage.concrete:
@@ -69,6 +71,21 @@ class gets(angr.SimProcedure):
 
 			return dst
 
+def ngx_recv(state):
+	dst = state.regs.rdx
+	fd = 0
+	simfd = state.posix.get_fd(fd)
+	symbolic_size = claripy.BVS('size', 32)
+	real_size = simfd.read(dst, 0x1100)		
+
+	print("[ngx_recv]mem 0x7ffffb010={}".format(state.memory.load(0x7ffffb010, 0x1100)))
+	print("[ngx_recv]max_packet_size={}".format(state.libc.max_packet_size))
+	print("[ngx_recv]recv size={}".format(state.solver.eval(real_size)))
+	#IPython.embed()
+
+	# put return val in rax
+	#state.regs.rax = claripy.BVS('res', 32)
+	state.regs.rax = -2 #NGX_AGAIN
 
 
 class Bof_Aeg(object):
@@ -76,11 +93,19 @@ class Bof_Aeg(object):
 		# virtual base address
 		self.project = angr.Project(bin, main_opts={'base_addr': base_addr}, load_options={'auto_load_libs': False})
 		#self.project.hook_symbol('gets', angr.SIM_PROCEDURES['libc']['gets']())
-		self.project.hook_symbol('gets', gets())
+		
+		self.nginx_hook()
 		self.num_input_chars = 256
 		self.overflow = True
 		self.vuln_addr = 0
 		self.stdin_buf_addr = 0
+
+	def toy_hook(self):
+		self.project.hook_symbol('gets', gets())
+
+	def nginx_hook(self):
+		self.project.hook(0x1004554b8, hook=ngx_recv, length=3)	# replace call r->connection->recv
+		
 
 	def is_unconstrained(self, m, constraints, start_addr):
 		''' Use concretized input which satisfies constraints to check if it can exploit vulnerability '''
@@ -151,6 +176,16 @@ class Bof_Aeg(object):
 
 	def check_mem_corruption(self, simgr):
 		print("active {}".format(simgr.active))
+		#IPython.embed()
+		for path in simgr.active:
+			if path.addr==0xa0002bcd0:
+				print("[check_mem_corruption]state {}, constraints={}".format(path, path.solver.constraints))
+				last_block = bof_aeg.project.factory.block(list(path.history.bbl_addrs)[-1])
+				print("[check_mem_corruption]last block {}".format(last_block))
+				#path.memory.store(claripy.BVS('rip', 64), 0x7ffffc088)
+				#IPython.embed()
+			
+
 		if len(simgr.unconstrained):
 			print("len of unconstrained {}".format(len(simgr.unconstrained)))
 			for path in simgr.unconstrained:
@@ -178,18 +213,35 @@ class Bof_Aeg(object):
 		state = self.project.factory.call_state(addr=start_addr, add_options={
 			angr.options.CONSTRAINT_TRACKING_IN_SOLVER,
 			angr.options.SYMBOL_FILL_UNCONSTRAINED_MEMORY,
-			angr.options.SYMBOL_FILL_UNCONSTRAINED_REGISTERS
+			angr.options.SYMBOL_FILL_UNCONSTRAINED_REGISTERS,
+			#angr.options.SYMBOLIC_WRITE_ADDRESSES,
+			#angr.options.CONSERVATIVE_READ_STRATEGY,
+			#angr.options.CONSERVATIVE_WRITE_STRATEGY,
 			})
 		
 		state.libc.buf_symbolic_bytes = 0x100
 		state.libc.max_str_len = 0x100
-		state.libc.max_gets_size = 0x100 # define gets() size; 溢出太长会影响system的envp
+		state.libc.max_gets_size = 0x100 
+		state.libc.max_packet_size = 0x1000+0x100 # nginx case: buffer size + overflow 
 		def log_func(s):
-			print("[gets] rcx={}, rsp={}, rbp={}".format(hex(s.solver.eval(s.regs.rcx)), hex(s.solver.eval(s.regs.rsp)),  hex(s.solver.eval(s.regs.rbp))))
-			self.stdin_buf_addr = s.solver.eval(s.regs.rcx)
-			
+			print("[log] rcx={}, rdx={}, rsp={}, rbp={}, rip={}".format(hex(s.solver.eval(s.regs.rcx)), hex(s.solver.eval(s.regs.rdx)), hex(s.solver.eval(s.regs.rsp)), hex(s.solver.eval(s.regs.rbp)), hex(s.solver.eval(s.regs.rip))))
+			self.stdin_buf_addr = s.solver.eval(s.regs.rcx) # for case of toy app 
+			self.recv_buf_addr = s.solver.eval(s.regs.rdx) # for case of nginx 
+		def mem_func(s):
+			print("[mem write] mem on 0x7ffffc088 is {}, rip={}".format(s.memory.load(0x7ffffc088, 8), s.regs.rip))
+		
+		
 
 		state.inspect.b('simprocedure', simprocedure_name='gets', when=angr.BP_BEFORE, action=log_func)
+		state.inspect.b('simprocedure', simprocedure_name='ngx_recv', when=angr.BP_BEFORE, action=log_func)
+		state.inspect.b('simprocedure', simprocedure_name='ngx_recv', when=angr.BP_AFTER, action=log_func)
+		state.inspect.b('mem_write', mem_write_address=0x7ffffc080, when=angr.BP_AFTER, action=mem_func)
+		state.inspect.b('mem_write', mem_write_address=0x7ffffc088, when=angr.BP_AFTER, action=mem_func)
+		state.inspect.b('mem_write', mem_write_address=0x7ffffb010, when=angr.BP_AFTER, action=mem_func)
+
+
+
+
 		#for char in symbolic_input.chop(bits=8):
 		#	state.add_constraints(char >= 'A', char <= 'z')
 
@@ -199,14 +251,19 @@ class Bof_Aeg(object):
 		print("sp is {}".format(state.regs.rsp))
 
 		simgr = self.project.factory.simgr(state, save_unconstrained=True)
+		simgr.use_technique(angr.exploration_techniques.DFS())
 		simgr.stashes['mem_corrupt']  = []
 		
 		simgr.explore(step_func=self.check_mem_corruption)
 		print("corrupt {} len={}".format(simgr.stashes['mem_corrupt'], len(simgr.stashes['mem_corrupt'])))
 	
+		if simgr.found:
+			print("ngx_recv found!")
+
 		if len(simgr.stashes['mem_corrupt'])==0:
 			self.overflow = False
 			return 
+
 
 		unconstrained_state = simgr.stashes['mem_corrupt'][-1]
 

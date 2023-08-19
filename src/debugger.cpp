@@ -31,7 +31,7 @@ DWORD GetProcessIdByName(const std::string processName)
             if (pe32.szExeFile == processName)
             {
                 pid = pe32.th32ProcessID;
-                break;
+                //break;
             }
         } while (Process32Next(hSnapshot, &pe32));
     }
@@ -176,7 +176,7 @@ void dump_stack(CONTEXT* ctx, HANDLE& hProcess)
     std::ofstream file("stack");
 
     DWORD_PTR stack_top = ctx->Rsp;
-    DWORD_PTR stack_bottom = ctx->Rbp + 0x100;
+    DWORD_PTR stack_bottom = ctx->Rbp + 0x1010 + 0x10; // nginx offset and rbp/rip offset // Not sure why $rbp doesn't point at bottom 
     std::cout << "sp " << stack_top << ", fp " << stack_bottom <<std::endl;
 
     for (DWORD_PTR i = stack_top; i <= stack_bottom; i += 8)
@@ -412,7 +412,7 @@ int main(int argc, char** argv)
                         CloseHandle(hProcess);
                     }
                                           
-                    
+                    std::cout<<"[sus bp] hit"<<std::endl;
                     dump_registers(&ctx); // prepare for env of symbolic execution
                     dump_stack(&ctx, hProcess);
 

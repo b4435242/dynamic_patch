@@ -15,14 +15,14 @@ def check_mem_corruption(simgr):
 
 def main():
 
-	p = angr.Project("../test/toy/a.exe", main_opts={'base_addr': 0x400000})
+	p = angr.Project("../test/nginx/nginx.exe", main_opts={'base_addr': 0x100400000})
 	
-	state = p.factory.entry_state()
+	state = p.factory.call_state(addr=0x10045538a)
 	
 	simgr = p.factory.simgr(state, save_unconstrained=True)
 	simgr.stashes['mem_corrupt']  = []
 	
-	simgr.explore(step_func=check_mem_corruption, find=0xdeadbeaf)
+	simgr.explore(step_func=check_mem_corruption, find=0x1004554b8)
 
 	#IPython.embed()
 	print(simgr.stashes['mem_corrupt'])
