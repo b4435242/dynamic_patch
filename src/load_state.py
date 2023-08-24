@@ -162,3 +162,18 @@ def load_stdin_buf(filename):
 			break
 	print(processed_bytes)
 	return processed_bytes
+
+def load_size(filename):
+	with open(filename, 'r') as file:
+		lines = file.readlines()
+	hex_val = lines[0].split()[1]
+	val = int(hex_val, 16)
+	print("[load]size = {}".format(val))
+	return val
+
+def load_mode(filename):
+	with open(filename, 'r') as file:
+		lines = file.readlines()
+	line = lines[2].rstrip()
+	print(line) 
+	return line

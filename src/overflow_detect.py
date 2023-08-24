@@ -10,7 +10,7 @@ rip_pattern = 0xCCCCCCCCCCCCCCCC
 
 
 _l = logging.getLogger(name=__name__)
-
+sys.set_int_max_str_digits(0)
 
 
 class gets(angr.SimProcedure):
@@ -75,10 +75,10 @@ def ngx_recv(state):
 	dst = state.regs.rdx
 	fd = 0
 	simfd = state.posix.get_fd(fd)
-	symbolic_size = claripy.BVS('size', 32)
-	real_size = simfd.read(dst, 0x1100)		
+	symbolic_size = state.globals["size"]
+	real_size = simfd.read(dst, symbolic_size)		
 
-	print("[ngx_recv]mem 0x7ffffb010={}".format(state.memory.load(0x7ffffb010, 0x1100)))
+	#print("[ngx_recv]mem on rip is {}".format(state.memory.load(0x7ffffc088, 8)))
 	print("[ngx_recv]max_packet_size={}".format(state.libc.max_packet_size))
 	print("[ngx_recv]recv size={}".format(state.solver.eval(real_size)))
 	#IPython.embed()
@@ -102,110 +102,176 @@ class Bof_Aeg(object):
 
 	def toy_hook(self):
 		self.project.hook_symbol('gets', gets())
+		self.mode = "continuous"
 
 	def nginx_hook(self):
-		self.project.hook(0x1004554b8, hook=ngx_recv, length=3)	# replace call r->connection->recv
+		self.recv_addr = 0x1004554b8
+		self.project.hook(self.recv_addr, hook=ngx_recv, length=3)	# replace call r->connection->recv
+		self.mode = "size"
+		self.size_addr = 0x7ffffc078 # manual for case of nginx
+		
 		
 
 	def is_unconstrained(self, m, constraints, start_addr):
-		''' Use concretized input which satisfies constraints to check if it can exploit vulnerability '''
-		
-		# Generate concretized input with constraints #
-		state = self.project.factory.entry_state()
-		constraints = constraints[:m+1]
-		for c in constraints:
-			state.solver.add(c)
-		if not state.solver.satisfiable():
-			return False
 
-		concretized_input = state.solver.eval(self.symbolic_input, cast_to=bytes)
-		#trim 
-		print(concretized_input)
-		trim_index = 1
-		while concretized_input[-trim_index]==0:
-			trim_index += 1
-		concretized_input = concretized_input[:-trim_index]
+		if self.mode=="continuous":
+			''' Use concretized input which satisfies constraints to check if it can exploit vulnerability '''
+			
+			# Generate concretized input with constraints #
+			state = self.project.factory.entry_state()
+			constraints = constraints[:m+1]
+			for c in constraints:
+				state.solver.add(c)
+			if not state.solver.satisfiable():
+				return False
 
-		print(concretized_input)
-		#IPython.embed()
+			concretized_input = state.solver.eval(self.symbolic_input, cast_to=bytes)
+			#trim 
+			print(concretized_input)
+			trim_index = 1
+			while concretized_input[-trim_index]==0:
+				trim_index += 1
+			concretized_input = concretized_input[:-trim_index]
 
-		# Check if it can find random address e.g. rip_pattern=0xcccccccc here #
-		simfile = angr.SimFile('/dev/stdin', content=concretized_input)
-		state = self.project.factory.call_state(addr=start_addr, stdin=simfile, add_options={ # currently must start from the start of func
-			angr.options.CONSTRAINT_TRACKING_IN_SOLVER,
-			angr.options.SYMBOL_FILL_UNCONSTRAINED_MEMORY,
-			angr.options.SYMBOL_FILL_UNCONSTRAINED_REGISTERS
-			})
-		load_state.set_regs(state, regs)
-		simgr = self.project.factory.simgr(state)
-		
-		simgr.explore(find=rip_pattern)
-		return len(simgr.found)>0
+			print(concretized_input)
+			#IPython.embed()
+
+			# Check if it can find random address e.g. rip_pattern=0xcccccccc here #
+			simfile = angr.SimFile('/dev/stdin', content=concretized_input)
+			state = self.project.factory.call_state(addr=start_addr, stdin=simfile, add_options={ # currently must start from the start of func
+				angr.options.CONSTRAINT_TRACKING_IN_SOLVER,
+				angr.options.SYMBOL_FILL_UNCONSTRAINED_MEMORY,
+				angr.options.SYMBOL_FILL_UNCONSTRAINED_REGISTERS
+				})
+			load_state.set_regs(state, regs)
+			simgr = self.project.factory.simgr(state)
+			
+			simgr.explore(find=rip_pattern)
+			return len(simgr.found)>0
+		elif self.mode=="size":
+			''' symbolic_input here means recv buf '''
+			#symbolic_input = claripy.BVS('input', self.concrete_size*8) # self.concrete_size cal in find_minimum_constraints 
+			symbolic_input = self.state.posix.stdin.content[0][0]
+			print("[is_unconstrained]concrete_size={}".format(self.concrete_size))
+
+			# Generate concretized input with constraints #
+			state = self.project.factory.entry_state()
+			for c in constraints:
+				state.solver.add(c)
+			if not state.solver.satisfiable():
+				return False
+
+			# concretize input with extra threshold constraint
+			symbolic_size = self.state.globals["size"] # load var symbolic_size 
+			threshold_constraint = claripy.ULE(symbolic_size, m)
+			#state.solver.add(symbolic_size==m)
+			print("[is_unconstrained] constraints={}".format(state.solver.constraints))
+			
+			concretized_input = state.solver.eval(symbolic_input, cast_to=bytes)
+			#print(concretized_input)
+
+			# Check if it can find random address e.g. rip_pattern=0xcccccccc here #
+			simfile = angr.SimFile('/dev/stdin', content=concretized_input)
+			state = self.project.factory.call_state(addr=start_addr, stdin=simfile, add_options={ # currently must start from the start of func
+				angr.options.CONSTRAINT_TRACKING_IN_SOLVER,
+				angr.options.SYMBOL_FILL_UNCONSTRAINED_MEMORY,
+				angr.options.SYMBOL_FILL_UNCONSTRAINED_REGISTERS
+				})
+			load_state.set_regs(state, regs)
+			state.globals["size"] = m # set concrete size for hook ngx_recv 
+
+			simgr = self.project.factory.simgr(state)
+			
+			simgr.explore(find=rip_pattern)
+			return len(simgr.found)>0
 
 
-	def find_minimum_constraints(self, constraints, start_addr): 
-		# Function to extract byte index from constraint name
-		def get_byte_index(constraint):
-			# Parse the constraint name to extract the byte index
-			name = str(constraint)
-			start = name.index('[') + 1
-			end = name.index(':')
-			return -int(name[start:end])
+	def find_minimum_constraints(self, constraints, start_addr):
+		if self.mode=="continuous": 
+			# Function to extract byte index from constraint name
+			def get_byte_index(constraint):
+				# Parse the constraint name to extract the byte index
+				name = str(constraint)
+				start = name.index('[') + 1
+				end = name.index(':')
+				return -int(name[start:end])
 
-		# Sort the constraints based on the byte index
-		constraints = sorted(constraints, key=get_byte_index)
+			# Sort the constraints based on the byte index
+			constraints = sorted(constraints, key=get_byte_index)
 
-		# binary search
-		n = len(constraints)
-		l = 0
-		r = n-1
-		while l<r:
-			m = (l+r)/2
-			m = int(m)
-			res = self.is_unconstrained(m, constraints, start_addr)
-			if res:
-				r = m-1
-			else:
-				l = m+1
-		
-		# drop 8 last bytes constraints cuz it is a specific random address
-		if r>=8:
-			r -= 8
-		return constraints[:r+1]	
+			# binary search
+			n = len(constraints)
+			l = 0
+			r = n-1
+			while l<=r:
+				m = (l+r)/2
+				m = int(m)
+				res = self.is_unconstrained(m, constraints, start_addr)
+				if res:
+					r = m-1
+				else:
+					l = m+1
+			
+			# drop 8 last bytes constraints cuz it is a specific random address
+			if r>=8:
+				r -= 8
+			return constraints[:l+1] # originallly r+1?
+		elif self.mode=="size":
+			def get_size_constraint_value():
+				for c in constraints:
+					if "size" in str(c.args[0]) and c.op=="ULE":
+						val = self.state.solver.eval(c.args[1])
+						return val
+			
+			concrete_size = get_size_constraint_value()
+			self.concrete_size = concrete_size
+			symbolic_size = self.state.globals["size"]
+
+			# binary search
+			n = concrete_size
+			l = 0
+			r = n-1
+			while l<=r:
+				m = (l+r)/2
+				m = int(m)
+				res = self.is_unconstrained(m, constraints, start_addr)
+				if res:
+					r = m-1
+				else:
+					l = m+1
+			# generate new constraint for size, trigger err if size>threshold
+			print("[find_minimum_constraints] size={}".format(l+1))
+			threshold_constraint = claripy.UGE(symbolic_size, l+1) # l is index, while l+1 is size
+			return [threshold_constraint]
 
 
 	def check_mem_corruption(self, simgr):
 		print("active {}".format(simgr.active))
-		#IPython.embed()
-		for path in simgr.active:
-			if path.addr==0xa0002bcd0:
-				print("[check_mem_corruption]state {}, constraints={}".format(path, path.solver.constraints))
-				last_block = bof_aeg.project.factory.block(list(path.history.bbl_addrs)[-1])
-				print("[check_mem_corruption]last block {}".format(last_block))
-				#path.memory.store(claripy.BVS('rip', 64), 0x7ffffc088)
-				#IPython.embed()
 			
-
 		if len(simgr.unconstrained):
-			print("len of unconstrained {}".format(len(simgr.unconstrained)))
 			for path in simgr.unconstrained:
-				print("unconstrained {}".format(simgr.unconstrained))
 				if path.satisfiable(extra_constraints=[path.regs.rip == rip_pattern]):
 				#if path.regs.rip.symbolic:
-					
-					vuln_block = bof_aeg.project.factory.block(list(path.history.bbl_addrs)[-1])
-					self.vuln_addr = vuln_block.addr + vuln_block.size - 1
-					print("Vuln_addr: 0x%x"%self.vuln_addr)
 					path.add_constraints(path.regs.rip == rip_pattern)
-					if path.satisfiable():
-						simgr.stashes['mem_corrupt'].append(path)
+					vuln_addr = self.get_vuln_addr(path)
+					if vuln_addr <= self.end_addr and vuln_addr>=self.start_addr:
+						print("unconstrained {}".format(simgr.unconstrained))
+						print("Vuln_addr: 0x%x"%self.get_vuln_addr(path))
+						if path.satisfiable():
+							simgr.stashes['mem_corrupt'].append(path)
 					simgr.stashes['unconstrained'].remove(path)
 					simgr.drop(stash='active')
-					print(path.regs.rip[0])
+				
 		return simgr
+
+	def get_vuln_addr(self, state):
+		vuln_block = bof_aeg.project.factory.block(list(state.history.bbl_addrs)[-1])
+		return vuln_block.addr + vuln_block.size - 1
 
 	def find_buf_overflow(self, start_addr, end_addr, regs, stack):
 		#symsize = claripy.BVS('stdin_size', 64)
+		self.start_addr = start_addr
+		self.end_addr = end_addr
 		
 		symbolic_input = claripy.BVS('input', self.num_input_chars*8)
 		#self.symbolic_input = symbolic_input
@@ -214,32 +280,26 @@ class Bof_Aeg(object):
 			angr.options.CONSTRAINT_TRACKING_IN_SOLVER,
 			angr.options.SYMBOL_FILL_UNCONSTRAINED_MEMORY,
 			angr.options.SYMBOL_FILL_UNCONSTRAINED_REGISTERS,
-			#angr.options.SYMBOLIC_WRITE_ADDRESSES,
-			#angr.options.CONSERVATIVE_READ_STRATEGY,
-			#angr.options.CONSERVATIVE_WRITE_STRATEGY,
 			})
 		
+
 		state.libc.buf_symbolic_bytes = 0x100
 		state.libc.max_str_len = 0x100
 		state.libc.max_gets_size = 0x100 
 		state.libc.max_packet_size = 0x1000+0x100 # nginx case: buffer size + overflow 
+
+		# For mode of size 
+		state.globals["size"] = claripy.BVS('size', 64)
+
 		def log_func(s):
 			print("[log] rcx={}, rdx={}, rsp={}, rbp={}, rip={}".format(hex(s.solver.eval(s.regs.rcx)), hex(s.solver.eval(s.regs.rdx)), hex(s.solver.eval(s.regs.rsp)), hex(s.solver.eval(s.regs.rbp)), hex(s.solver.eval(s.regs.rip))))
 			self.stdin_buf_addr = s.solver.eval(s.regs.rcx) # for case of toy app 
 			self.recv_buf_addr = s.solver.eval(s.regs.rdx) # for case of nginx 
-		def mem_func(s):
-			print("[mem write] mem on 0x7ffffc088 is {}, rip={}".format(s.memory.load(0x7ffffc088, 8), s.regs.rip))
-		
+			self.size_addr = 0x7ffffc078 # manual for case of nginx
 		
 
 		state.inspect.b('simprocedure', simprocedure_name='gets', when=angr.BP_BEFORE, action=log_func)
 		state.inspect.b('simprocedure', simprocedure_name='ngx_recv', when=angr.BP_BEFORE, action=log_func)
-		state.inspect.b('simprocedure', simprocedure_name='ngx_recv', when=angr.BP_AFTER, action=log_func)
-		state.inspect.b('mem_write', mem_write_address=0x7ffffc080, when=angr.BP_AFTER, action=mem_func)
-		state.inspect.b('mem_write', mem_write_address=0x7ffffc088, when=angr.BP_AFTER, action=mem_func)
-		state.inspect.b('mem_write', mem_write_address=0x7ffffb010, when=angr.BP_AFTER, action=mem_func)
-
-
 
 
 		#for char in symbolic_input.chop(bits=8):
@@ -266,51 +326,45 @@ class Bof_Aeg(object):
 
 
 		unconstrained_state = simgr.stashes['mem_corrupt'][-1]
-
-		#input_bvv = claripy.BVV(input_value, len(input_value)*8)
-		#input_bvv = input_bvv.zero_extend((num_input_chars-len(input_value))*8)
 		unconstrained_state.solver.simplify()
-		stdin_constraints = unconstrained_state.solver.constraints
-
-		self.symbolic_input = unconstrained_state.posix.stdin.content[0][0]
-
-		minimum_constraints = self.find_minimum_constraints(stdin_constraints, start_addr)
+		self.vuln_addr = self.get_vuln_addr(unconstrained_state) 
+		self.state = unconstrained_state
+		constraints = unconstrained_state.solver.constraints
+		print(constraints)
+		
+		minimum_constraints = self.find_minimum_constraints(constraints, start_addr)
 		self.minimum_constraints = minimum_constraints
+
 
 		print("constraints = {}".format(minimum_constraints))
 		#IPython.embed()
 
 		# Solve for command-line argument that will let us set RBP and RIP
-		solution = unconstrained_state.solver.eval(self.symbolic_input, cast_to=bytes)
+		solution = unconstrained_state.solver.eval(self.state.posix.stdin.content[0][0], cast_to=bytes)
 		#print("Command-line arg to hijack rip:", solution)
 		print("Hijacked-value to be placed at offset:", solution.index(rip_pattern.to_bytes(8, byteorder='little')))
 		#print(rip_pattern)
 
-		#stdin_buf = self.get_concrete_bytes()
-		#self.satisfiable(minimum_constraints, stdin_buf)
-		#self.satisfiable(minimum_constraints, "hello\n")
-		#self.satisfiable(minimum_constraints, b'\xf5\xf5\xf5\xf5\xf5\xf5\xf5\xf5\xf5\xf5\xf5\xf5\xf5\xf5\xf5\xf5\xf5\xf5\xf5\xf5\xf5\xf5\xf5\xf5\xcc\xcc\xcc\xcc\x00\x00\x00\x00')
-		'''
-		# Check if the test state satisfies the stdin constraints of the constrained state
-		satisfiable = unconstrained_state.solver.satisfiable(extra_constraints=[symbolic_input==input_bvv])
 
-		if satisfiable:
-			print("The test string satisfies the stdin constraints.")
-		else:
-			print("The test string does not satisfy the stdin constraints.")
-		'''
+	def get_symbolic_var(self):
+		if self.mode=="continuous":
+			return self.state.posix.stdin.content[0][0]
+		elif self.mode=="size":
+			return self.state.globals["size"]
+
 
 	def write_analysis(self):
 		lines = [
 			str(self.overflow) + '\n',
-			hex(self.vuln_addr) + '\n',
-			hex(self.stdin_buf_addr)
+			hex(self.recv_addr) + '\n',
+			self.mode + '\n',
+			hex(self.stdin_buf_addr) if self.mode=="continuous" else hex(self.size_addr)
 		]
 		with open('analysis', 'w') as f:
 			f.writelines(lines)
 		if self.overflow:
 			load_state.dump_constraints(self.minimum_constraints, "constraints")
-			load_state.dump_symbolic_vars(self.symbolic_input, "symbolic_vars")
+			load_state.dump_symbolic_vars(self.get_symbolic_var(), "symbolic_vars")
 
 def main():
 	
