@@ -94,7 +94,7 @@ class Bof_Aeg(object):
 		self.project = angr.Project(bin, main_opts={'base_addr': base_addr}, load_options={'auto_load_libs': False})
 		#self.project.hook_symbol('gets', angr.SIM_PROCEDURES['libc']['gets']())
 		
-		self.nginx_hook()
+		self.nginx_config()
 		self.num_input_chars = 256
 		self.overflow = True
 		self.vuln_addr = 0
@@ -104,11 +104,14 @@ class Bof_Aeg(object):
 		self.project.hook_symbol('gets', gets())
 		self.mode = "continuous"
 
-	def nginx_hook(self):
+	def nginx_config(self):
 		self.recv_addr = 0x1004554b8
 		self.project.hook(self.recv_addr, hook=ngx_recv, length=3)	# replace call r->connection->recv
 		self.mode = "size"
 		self.size_addr = 0x7ffffc078 # manual for case of nginx
+		# segmentation fault if vuln_addr set at ret
+		# call before write_analysis to set vuln_addr manually
+		self.vuln_addr = self.recv_addr
 		
 		
 
@@ -345,6 +348,9 @@ class Bof_Aeg(object):
 		print("Hijacked-value to be placed at offset:", solution.index(rip_pattern.to_bytes(8, byteorder='little')))
 		#print(rip_pattern)
 
+		# to set vuln_addr=recv_addr
+		self.nginx_config()
+
 
 	def get_symbolic_var(self):
 		if self.mode=="continuous":
@@ -356,7 +362,7 @@ class Bof_Aeg(object):
 	def write_analysis(self):
 		lines = [
 			str(self.overflow) + '\n',
-			hex(self.recv_addr) + '\n',
+			hex(self.vuln_addr) + '\n',
 			self.mode + '\n',
 			hex(self.stdin_buf_addr) if self.mode=="continuous" else hex(self.size_addr)
 		]
