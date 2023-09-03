@@ -2,7 +2,9 @@ import angr, argparse, sys, IPython
 import claripy
 import load_state
 import struct
-from angr.storage.memory_mixins.address_concretization_mixin import MultiwriteAnnotation
+import procedure
+
+
 from angr.misc.ux import once
 import logging
 
@@ -13,107 +15,40 @@ _l = logging.getLogger(name=__name__)
 sys.set_int_max_str_digits(0)
 
 
-class gets(angr.SimProcedure):
-	# pylint:disable=arguments-differ
-
-	def run(self, dst):
-		if once("gets_warning"):
-			_l.warning(
-				"The use of gets in a program usually causes buffer overflows. You may want to adjust "
-				"SimStateLibc.max_gets_size to properly mimic an overflowing read."
-			)
-
-		fd = 0
-		simfd = self.state.posix.get_fd(fd)
-		if simfd is None:
-			return 0
-
-		max_size = self.state.libc.max_gets_size
-		dst = bof_aeg.stdin_buf_addr
-		# case 0: the data is concrete. we should read it a byte at a time since we can't seek for
-		# the newline and we don't have any notion of buffering in-memory
-		if simfd.read_storage.concrete:
-			count = 0
-			while count < max_size - 1:
-				data, real_size = simfd.read_data(1)
-				if self.state.solver.is_true(real_size == 0):
-					break
-				self.state.memory.store(dst + count, data)
-				count += 1
-				if self.state.solver.is_true(data == b"\n"):
-					break
-			self.state.memory.store(dst + count, b"\0")
-			return dst
-
-		# case 2: the data is symbolic, the newline could be anywhere. Read the maximum number of bytes
-		# (SHORT_READS should take care of the variable length) and add a constraint to assert the
-		# newline nonsense.
-		# caveat: there could also be no newline and the file could EOF.
-		else:
-			data, real_size = simfd.read_data(max_size - 1)
-
-			for i, byte in enumerate(data.chop(8)):
-				self.state.add_constraints(
-					self.state.solver.If(
-						i + 1 != real_size,
-						byte != b"\n",  # if not last byte returned, not newline
-						self.state.solver.Or(  # otherwise one of the following must be true:
-							i + 2 == max_size,  # - we ran out of space, or
-							simfd.eof(),  # - the file is at EOF, or
-							byte == b"\n",  # - it is a newline
-						),
-					)
-				)
-			self.state.memory.store(dst, data, size=real_size)
-			end_address = dst + real_size
-			end_address = end_address.annotate(MultiwriteAnnotation())
-			self.state.memory.store(end_address, b"\0")
-
-			return dst
-
-def ngx_recv(state):
-	dst = state.regs.rdx
-	fd = 0
-	simfd = state.posix.get_fd(fd)
-	symbolic_size = state.globals["size"]
-	real_size = simfd.read(dst, symbolic_size)		
-
-	#print("[ngx_recv]mem on rip is {}".format(state.memory.load(0x7ffffc088, 8)))
-	print("[ngx_recv]max_packet_size={}".format(state.libc.max_packet_size))
-	print("[ngx_recv]recv size={}".format(state.solver.eval(real_size)))
-	#IPython.embed()
-
-	# put return val in rax
-	#state.regs.rax = claripy.BVS('res', 32)
-	state.regs.rax = -2 #NGX_AGAIN
 
 
 class Bof_Aeg(object):
 	def __init__(self, bin, base_addr):
 		# virtual base address
 		self.project = angr.Project(bin, main_opts={'base_addr': base_addr}, load_options={'auto_load_libs': False})
-		#self.project.hook_symbol('gets', angr.SIM_PROCEDURES['libc']['gets']())
-		
-		self.nginx_config()
+		self.cc = self.project.factory.cc()
+		print("cc={}".format(self.cc))
+
+		self.cve_2021_3177_config() #self.nginx_config()
 		self.num_input_chars = 256
 		self.overflow = True
 		self.vuln_addr = 0
 		self.stdin_buf_addr = 0
 
 	def toy_hook(self):
-		self.project.hook_symbol('gets', gets())
+		self.project.hook_symbol('gets', procedure.gets())
 		self.mode = "continuous"
 
 	def nginx_config(self):
 		self.recv_addr = 0x1004554b8
-		self.project.hook(self.recv_addr, hook=ngx_recv, length=3)	# replace call r->connection->recv
+		self.project.hook(self.recv_addr, hook=procedure.ngx_recv, length=3)	# replace call r->connection->recv
 		self.mode = "size"
 		self.size_addr = 0x7ffffc078 # manual for case of nginx
 		# segmentation fault if vuln_addr set at ret
 		# call before write_analysis to set vuln_addr manually
 		self.vuln_addr = self.recv_addr
-		
-		
+
+	def cve_2021_3177_config(self):
+		self.mode = "size"
+		#cc = self.project.factory.cc_from_arg_kinds((True, True), ret_fp=True)
+		self.project.hook_symbol('sprintf', procedure.sprintf())
+		print('0x100500070 is hooked by {}'.format(self.project.hooked_by(0x100500070)))
+
 
 	def is_unconstrained(self, m, constraints, start_addr):
 
@@ -250,7 +185,7 @@ class Bof_Aeg(object):
 
 	def check_mem_corruption(self, simgr):
 		print("active {}".format(simgr.active))
-			
+		#IPython.embed()
 		if len(simgr.unconstrained):
 			for path in simgr.unconstrained:
 				if path.satisfiable(extra_constraints=[path.regs.rip == rip_pattern]):
@@ -284,7 +219,6 @@ class Bof_Aeg(object):
 			angr.options.SYMBOL_FILL_UNCONSTRAINED_MEMORY,
 			angr.options.SYMBOL_FILL_UNCONSTRAINED_REGISTERS,
 			})
-		
 
 		state.libc.buf_symbolic_bytes = 0x100
 		state.libc.max_str_len = 0x100
@@ -293,16 +227,21 @@ class Bof_Aeg(object):
 
 		# For mode of size 
 		state.globals["size"] = claripy.BVS('size', 64)
+		# For sprintf func
+		state.globals["r8"] = claripy.BVS('r8', 64)
+		state.globals["r9"] = claripy.BVS('r9', 64)
 
 		def log_func(s):
-			print("[log] rcx={}, rdx={}, rsp={}, rbp={}, rip={}".format(hex(s.solver.eval(s.regs.rcx)), hex(s.solver.eval(s.regs.rdx)), hex(s.solver.eval(s.regs.rsp)), hex(s.solver.eval(s.regs.rbp)), hex(s.solver.eval(s.regs.rip))))
+			print("[log] rcx={}, rdx={}, r8={}, r9={}, rsp={}, rbp={}, rip={}".format(hex(s.solver.eval(s.regs.rcx)), hex(s.solver.eval(s.regs.rdx)),  hex(s.solver.eval(s.regs.r8)),  hex(s.solver.eval(s.regs.r9)), hex(s.solver.eval(s.regs.rsp)), hex(s.solver.eval(s.regs.rbp)), hex(s.solver.eval(s.regs.rip))))
 			self.stdin_buf_addr = s.solver.eval(s.regs.rcx) # for case of toy app 
 			self.recv_buf_addr = s.solver.eval(s.regs.rdx) # for case of nginx 
 			self.size_addr = 0x7ffffc078 # manual for case of nginx
+			#IPython.embed()
 		
 
 		state.inspect.b('simprocedure', simprocedure_name='gets', when=angr.BP_BEFORE, action=log_func)
 		state.inspect.b('simprocedure', simprocedure_name='ngx_recv', when=angr.BP_BEFORE, action=log_func)
+		state.inspect.b('simprocedure', simprocedure_name='sprintf', when=angr.BP_BEFORE, action=log_func)
 
 
 		#for char in symbolic_input.chop(bits=8):
@@ -311,7 +250,7 @@ class Bof_Aeg(object):
 		''' Setup concolic execution env '''
 		load_state.set_regs(state, regs)
 		load_state.set_stack(state, stack)
-		print("sp is {}".format(state.regs.rsp))
+		print("rsp={}, rbp={}".format(state.regs.rsp, state.regs.rbp))
 
 		simgr = self.project.factory.simgr(state, save_unconstrained=True)
 		simgr.use_technique(angr.exploration_techniques.DFS())
@@ -349,7 +288,7 @@ class Bof_Aeg(object):
 		#print(rip_pattern)
 
 		# to set vuln_addr=recv_addr
-		self.nginx_config()
+		#self.nginx_config()
 
 
 	def get_symbolic_var(self):

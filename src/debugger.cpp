@@ -177,7 +177,7 @@ void dump_stack(CONTEXT* ctx, HANDLE& hProcess)
 
     DWORD_PTR stack_top = ctx->Rsp;
     DWORD_PTR stack_bottom = ctx->Rbp + 0x1010 + 0x10; // nginx offset and rbp/rip offset // Not sure why $rbp doesn't point at bottom 
-    std::cout << "sp " << stack_top << ", fp " << stack_bottom <<std::endl;
+    std::cout << "sp= " << "   0x" << std::hex << stack_top << ", fp= " <<"   0x" << std::hex << stack_bottom <<std::endl;
 
     for (DWORD_PTR i = stack_top; i <= stack_bottom; i += 8)
     {
