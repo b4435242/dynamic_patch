@@ -77,7 +77,7 @@ def ngx_recv(state):
 	dst = state.regs.rdx
 	fd = 0
 	simfd = state.posix.get_fd(fd)
-	symbolic_size = state.globals["size"]
+	symbolic_size = state.globals["r8"]
 	real_size = simfd.read(dst, symbolic_size)		
 
 	#print("[ngx_recv]mem on rip is {}".format(state.memory.load(0x7ffffc088, 8)))
@@ -100,8 +100,10 @@ class sprintf(FormatParser):
 		fmt = va_arg("void*") #fmt = self.state.regs.rdx
 		dst_ptr = va_arg("void*") #dst_ptr = self.state.regs.rcx
 		# Only support 2 arg of fmt now for symbolic execution with x86-64 cc(calling convention) rcx rdx r8 r9
-		self.state.regs.r8 = self.state.globals['r8']
-		self.state.regs.r9 = self.state.globals['r9']
+		if 'r8' in self.state.globals:
+			self.state.regs.r8 = self.state.globals['r8']
+		if 'r9' in self.state.globals:
+			self.state.regs.r9 = self.state.globals['r9']
 
 		print("[sprintf] fmt={}".format(fmt))
 		print("[sprintf] dst_ptr={}".format(dst_ptr))
@@ -109,48 +111,66 @@ class sprintf(FormatParser):
 		# The format str is at index 1
 		fmt_str = self._parse(fmt)
 
-		string = None
-		for component in fmt_str.components:
-			# if this is just concrete data
-			if isinstance(component, bytes):
-				string = fmt_str._add_to_string(string, fmt_str.parser.state.solver.BVV(component))
-			elif isinstance(component, str):
-				raise Exception("this branch should be impossible?")
-			elif isinstance(component, claripy.ast.BV):  # pylint:disable=isinstance-second-argument-not-valid-type
-				string = fmt_str._add_to_string(string, component)
-			else:
-				# okay now for the interesting stuff
-				# what type of format specifier is it?
-				fmt_spec = component
-				if fmt_spec.spec_type == b"s":
-					if fmt_spec.length_spec == b".*":
-						str_length = va_arg("size_t")
-					else:
-						str_length = None
-					str_ptr = va_arg("char*")
-					string = fmt_str._add_to_string(string, fmt_str._get_str_at(str_ptr, max_length=str_length))
-				# integers, for most of these we'll end up concretizing values..
+		
+		# implementation of replace
+		def replace():
+			string = None
+			reg = ["r8", "r9"]
+			reg_idx = 0
+			for component in fmt_str.components:
+				# if this is just concrete data
+				if isinstance(component, bytes):
+					string = fmt_str._add_to_string(string, fmt_str.parser.state.solver.BVV(component))
+				elif isinstance(component, str):
+					raise Exception("this branch should be impossible?")
+				elif isinstance(component, claripy.ast.BV):  # pylint:disable=isinstance-second-argument-not-valid-type
+					string = fmt_str._add_to_string(string, component)
 				else:
-					# self-implement for float and double type
-					# Not considering negative case now
-					if fmt_spec.spec_type in (b"f"): 
+					# okay now for the interesting stuff
+					# what type of format specifier is it?
+					fmt_spec = component
+					if fmt_spec.spec_type == b"s":
+						if fmt_spec.length_spec == b".*":
+							str_length = va_arg("size_t")
+						else:
+							str_length = None
+						str_ptr = va_arg("char*")
+						string = fmt_str._add_to_string(string, fmt_str._get_str_at(str_ptr, max_length=str_length))
+					# self-implement for float and double type with supporting symbolic and concrete with 2 args at most which is from r8 or r9 only
+					# symbolic: create symbolic string of same length of MAX_VAL 
+					# concrete: create symbolic string of same length of input 
+					elif fmt_spec.spec_type in (b"f"):	
+						# r8 r9 pass flow globals -> regs -> i_val
 						i_val = va_arg("void*")
-						if fmt_str.parser.state.solver.symbolic(i_val):
-							# change globle var from bvs to fvs
-							if "r8" in str(i_val):
-								f_val = self.state.globals['r8'] = claripy.FPS('r8', claripy.fp.FSORT_DOUBLE)
-							elif "r9" in str(i_val):
-								f_val = self.state.globals['r9'] = claripy.FPS('r9', claripy.fp.FSORT_DOUBLE)
-							# C type
-							MAX_FLOAT = claripy.FPV(struct.unpack('>f', b'\x7f\x7f\xff\xff')[0], claripy.fp.FSORT_DOUBLE)
-							MAX_DOUBLE = claripy.FPV(struct.unpack('>d', b'\x7f\xef\xff\xff\xff\xff\xff\xff')[0], claripy.fp.FSORT_DOUBLE)  # 1.7976931348623157e+308
+							
+						# C type
+						MAX_FLOAT = claripy.FPV(struct.unpack('>f', b'\x7f\x7f\xff\xff')[0], claripy.fp.FSORT_DOUBLE)
+						MAX_DOUBLE = claripy.FPV(struct.unpack('>d', b'\x7f\xef\xff\xff\xff\xff\xff\xff')[0], claripy.fp.FSORT_DOUBLE)  # 1.7976931348623157e+308
+						# f_val assigned as symbolic var
+						f_val = claripy.FPS(reg[reg_idx], claripy.fp.FSORT_DOUBLE)
+						if fmt_str.parser.state.solver.symbolic(i_val): # case of symbolic float or double input
+							self.state.globals[reg[reg_idx]] = f_val
 							# concretize symbolic var to C max value
 							if fmt_spec.size==8: # double
 								c_val = fmt_str.parser.state.solver.eval(f_val, extra_constraints=[f_val==MAX_DOUBLE])
+								self.state.solver.add(f_val<=MAX_DOUBLE)
 							else: # float
 								c_val = fmt_str.parser.state.solver.eval(f_val, extra_constraints=[f_val==MAX_FLOAT])
-							s_val = str(Decimal(c_val))
-							
+								self.state.solver.add(f_val<=MAX_FLOAT)
+						else:  # case of concrete float or double input
+							c_val = fmt_str.parser.state.solver.eval(f_val, extra_constraints=[f_val==self.state.globals[reg[reg_idx]]]) # originally f_val==i_val, but need to take care of transformation from Python number to C float/double bytes 
+
+						# extend format to full precision
+						s_val = str(Decimal(c_val))
+						
+						if isinstance(fmt_spec.length_spec, int):
+							s_val = s_val.rjust(fmt_spec.length_spec, fmt_spec.pad_chr)
+						# transform concrete to symbolic with same length
+						symbolic_s_val = claripy.BVS("s_val", len(s_val)*8)
+						#IPython.embed()
+						string = fmt_str._add_to_string(string, symbolic_s_val)
+						
+					# integers, for most of these we'll end up concretizing values..
 					else:
 						# ummmmmmm this is a cheap translation but I think it should work
 						i_val = va_arg("void*")
@@ -176,13 +196,13 @@ class sprintf(FormatParser):
 						else:
 							raise SimProcedureError("Unimplemented format specifier '%s'" % fmt_spec.spec_type)
 
-					if isinstance(fmt_spec.length_spec, int):
-						s_val = s_val.rjust(fmt_spec.length_spec, fmt_spec.pad_chr)
+						if isinstance(fmt_spec.length_spec, int):
+							s_val = s_val.rjust(fmt_spec.length_spec, fmt_spec.pad_chr)
 
-					string = fmt_str._add_to_string(string, fmt_str.parser.state.solver.BVV(s_val.encode()))
-
-
-		#out_str = fmt_str.replace(self.va_arg)
+						string = fmt_str._add_to_string(string, fmt_str.parser.state.solver.BVV(s_val.encode()))
+					reg_idx += 1
+			return string
+		out_str = replace() #out_str = fmt_str.replace(self.va_arg)
 		self.state.memory.store(dst_ptr, out_str)
 		
 		print("[sprintf] fmt_str={}".format(fmt_str))

@@ -3,7 +3,9 @@ import claripy
 import load_state
 import struct
 import procedure
-
+import  math
+from decimal import *
+import loader
 
 from angr.misc.ux import once
 import logging
@@ -13,7 +15,6 @@ rip_pattern = 0xCCCCCCCCCCCCCCCC
 
 _l = logging.getLogger(name=__name__)
 sys.set_int_max_str_digits(0)
-
 
 
 
@@ -28,31 +29,30 @@ class Bof_Aeg(object):
 		self.num_input_chars = 256
 		self.overflow = True
 		self.vuln_addr = 0
-		self.stdin_buf_addr = 0
+		self.reg_id = None
 
 	def toy_hook(self):
 		self.project.hook_symbol('gets', procedure.gets())
-		self.mode = "continuous"
+		self.mode = "gets"
 
 	def nginx_config(self):
 		self.recv_addr = 0x1004554b8
 		self.project.hook(self.recv_addr, hook=procedure.ngx_recv, length=3)	# replace call r->connection->recv
-		self.mode = "size"
+		self.mode = "recv"
 		self.size_addr = 0x7ffffc078 # manual for case of nginx
 		# segmentation fault if vuln_addr set at ret
 		# call before write_analysis to set vuln_addr manually
-		self.vuln_addr = self.recv_addr
 
 	def cve_2021_3177_config(self):
-		self.mode = "size"
+		self.mode = "sprintf"
 		#cc = self.project.factory.cc_from_arg_kinds((True, True), ret_fp=True)
 		self.project.hook_symbol('sprintf', procedure.sprintf())
-		print('0x100500070 is hooked by {}'.format(self.project.hooked_by(0x100500070)))
 
 
 	def is_unconstrained(self, m, constraints, start_addr):
+		
 
-		if self.mode=="continuous":
+		if self.mode=="gets":
 			''' Use concretized input which satisfies constraints to check if it can exploit vulnerability '''
 			
 			# Generate concretized input with constraints #
@@ -60,22 +60,21 @@ class Bof_Aeg(object):
 			constraints = constraints[:m+1]
 			for c in constraints:
 				state.solver.add(c)
-			if not state.solver.satisfiable():
-				return False
 
-			concretized_input = state.solver.eval(self.symbolic_input, cast_to=bytes)
+			buffer = self.state.posix.stdin.content[0][0]
+			concretized_buffer = state.solver.eval(buffer, cast_to=bytes)
 			#trim 
-			print(concretized_input)
+			print(concretized_buffer)
 			trim_index = 1
-			while concretized_input[-trim_index]==0:
+			while concretized_buffer[-trim_index]==0:
 				trim_index += 1
-			concretized_input = concretized_input[:-trim_index]
+			concretized_buffer = concretized_buffer[:-trim_index]
 
-			print(concretized_input)
+			print(concretized_buffer)
 			#IPython.embed()
 
 			# Check if it can find random address e.g. rip_pattern=0xcccccccc here #
-			simfile = angr.SimFile('/dev/stdin', content=concretized_input)
+			simfile = angr.SimFile('/dev/stdin', content=concretized_buffer)
 			state = self.project.factory.call_state(addr=start_addr, stdin=simfile, add_options={ # currently must start from the start of func
 				angr.options.CONSTRAINT_TRACKING_IN_SOLVER,
 				angr.options.SYMBOL_FILL_UNCONSTRAINED_MEMORY,
@@ -86,46 +85,59 @@ class Bof_Aeg(object):
 			
 			simgr.explore(find=rip_pattern)
 			return len(simgr.found)>0
-		elif self.mode=="size":
+		elif self.mode=="recv":
 			''' symbolic_input here means recv buf '''
-			#symbolic_input = claripy.BVS('input', self.concrete_size*8) # self.concrete_size cal in find_minimum_constraints 
-			symbolic_input = self.state.posix.stdin.content[0][0]
-			print("[is_unconstrained]concrete_size={}".format(self.concrete_size))
+			buffer = self.state.posix.stdin.content[0][0]
 
 			# Generate concretized input with constraints #
 			state = self.project.factory.entry_state()
 			for c in constraints:
 				state.solver.add(c)
-			if not state.solver.satisfiable():
-				return False
+
 
 			# concretize input with extra threshold constraint
-			symbolic_size = self.state.globals["size"] # load var symbolic_size 
-			threshold_constraint = claripy.ULE(symbolic_size, m)
+			#symbolic_size = self.state.globals["r8"] # load var symbolic_size 
+			#threshold_constraint = claripy.ULE(symbolic_size, m)
 			#state.solver.add(symbolic_size==m)
-			print("[is_unconstrained] constraints={}".format(state.solver.constraints))
+			#print("[is_unconstrained] constraints={}".format(state.solver.constraints))
 			
-			concretized_input = state.solver.eval(symbolic_input, cast_to=bytes)
+			concretized_buffer = state.solver.eval(buffer, cast_to=bytes)
 			#print(concretized_input)
 
 			# Check if it can find random address e.g. rip_pattern=0xcccccccc here #
-			simfile = angr.SimFile('/dev/stdin', content=concretized_input)
+			simfile = angr.SimFile('/dev/stdin', content=concretized_buffer)
 			state = self.project.factory.call_state(addr=start_addr, stdin=simfile, add_options={ # currently must start from the start of func
 				angr.options.CONSTRAINT_TRACKING_IN_SOLVER,
 				angr.options.SYMBOL_FILL_UNCONSTRAINED_MEMORY,
 				angr.options.SYMBOL_FILL_UNCONSTRAINED_REGISTERS
 				})
 			load_state.set_regs(state, regs)
-			state.globals["size"] = m # set concrete size for hook ngx_recv 
+			state.globals["r8"] = m # set concrete size for hook ngx_recv 
 
 			simgr = self.project.factory.simgr(state)
 			
 			simgr.explore(find=rip_pattern)
 			return len(simgr.found)>0
+		elif self.mode=="sprintf":
+			
+			state = self.project.factory.call_state(addr=start_addr, add_options={ # currently must start from the start of func
+				angr.options.CONSTRAINT_TRACKING_IN_SOLVER,
+				angr.options.SYMBOL_FILL_UNCONSTRAINED_MEMORY,
+				angr.options.SYMBOL_FILL_UNCONSTRAINED_REGISTERS
+				})
+			load_state.set_regs(state, regs)
+			load_state.set_stack(state, stack)
+			''' set up r8 or r9 with concrete number'''
+			# self.reg_id is r8 or r9, which is determined by self.find_minimum_constraints.extra_constraints()
+			state.globals[self.reg_id] = m
+			simgr = self.project.factory.simgr(state, save_unconstrained=True)
+			simgr.stashes['mem_corrupt']  = []
+			simgr.explore(step_func=self.check_mem_corruption)
+			return len(simgr.mem_corrupt)>0
 
 
 	def find_minimum_constraints(self, constraints, start_addr):
-		if self.mode=="continuous": 
+		if self.mode=="gets": 
 			# Function to extract byte index from constraint name
 			def get_byte_index(constraint):
 				# Parse the constraint name to extract the byte index
@@ -154,19 +166,19 @@ class Bof_Aeg(object):
 			if r>=8:
 				r -= 8
 			return constraints[:l+1] # originallly r+1?
-		elif self.mode=="size":
-			def get_size_constraint_value():
+		elif self.mode=="recv":
+			# get r8 (size) constraints with <= op
+			def extract_constraints():
 				for c in constraints:
-					if "size" in str(c.args[0]) and c.op=="ULE":
+					if c.op=="ULE" and "r8" in str(c.args[0]):
+						var = self.state.globals["r8"]
 						val = self.state.solver.eval(c.args[1])
-						return val
+						return var, val
 			
-			concrete_size = get_size_constraint_value()
-			self.concrete_size = concrete_size
-			symbolic_size = self.state.globals["size"]
+			symbolic_var, concrete_val = extract_constraints()
 
 			# binary search
-			n = concrete_size
+			n = concrete_val
 			l = 0
 			r = n-1
 			while l<=r:
@@ -179,9 +191,50 @@ class Bof_Aeg(object):
 					l = m+1
 			# generate new constraint for size, trigger err if size>threshold
 			print("[find_minimum_constraints] size={}".format(l+1))
-			threshold_constraint = claripy.UGE(symbolic_size, l+1) # l is index, while l+1 is size
+			threshold_constraint = claripy.UGE(symbolic_var, l+1) # l is index, while l+1 is size
 			return [threshold_constraint]
 
+		elif self.mode=="sprintf":
+			# get r8 or r9 constraints with <= op
+			# determine key var is r8 or r9
+			def extract_constraints():
+				def op_filter(c):
+					return c.op=="ULE" or c.op=="fpLEQ"
+				for c in constraints:
+					if "r8" in str(c.args[0]) and op_filter(c):
+						self.reg_id = "r8"
+						var = self.state.globals["r8"]
+						val = self.state.solver.eval(c.args[1])
+						return var, val, c.op
+					elif "r9" in str(c.args[0]) and op_filter(c):
+						self.reg_id = "r9"
+						var = self.state.globals["r9"]
+						val = self.state.solver.eval(c.args[1])
+						return var, val, c.op
+			symbolic_var, concrete_val, op = extract_constraints()
+
+			if "fp" in op: # real number case
+				# binary search on digits 
+				n = concrete_val
+				l = 0
+				r = n-1
+				# transform to digits 
+				l, r = len(str(Decimal(l))), len(str(Decimal(r)))
+				while l<=r:
+					m = (l+r)/2
+					m = int(m)
+					real_number = math.pow(10, m-1) # pass real number with m digits
+					res = self.is_unconstrained(real_number, constraints, start_addr)
+					print('[is_unconstrained]m={}, l={}, r={}, res={}'.format(m, l, r, res))
+					if res:
+						r = m-1
+					else:
+						l = m+1
+				# generate new constraint for num, trigger err if num>threshold
+				print("[find_minimum_constraints] digits of num={}".format(l))
+				threshold = claripy.FPV(math.pow(10, l-1), claripy.fp.FSORT_DOUBLE) # transform back to num, l is digit of num
+				threshold_constraint = claripy.fpGEQ(symbolic_var, threshold) 
+				return [threshold_constraint]
 
 	def check_mem_corruption(self, simgr):
 		print("active {}".format(simgr.active))
@@ -203,14 +256,19 @@ class Bof_Aeg(object):
 		return simgr
 
 	def get_vuln_addr(self, state):
+		# use ret as vuln addr
 		vuln_block = bof_aeg.project.factory.block(list(state.history.bbl_addrs)[-1])
 		return vuln_block.addr + vuln_block.size - 1
+
+	def get_overflow_symbol_addr(self):
+		return loader.find_symbol(bin, self.mode)
 
 	def find_buf_overflow(self, start_addr, end_addr, regs, stack):
 		#symsize = claripy.BVS('stdin_size', 64)
 		self.start_addr = start_addr
 		self.end_addr = end_addr
-		
+		self.overflow_addr = self.get_overflow_symbol_addr() 
+
 		symbolic_input = claripy.BVS('input', self.num_input_chars*8)
 		#self.symbolic_input = symbolic_input
 		simfile = angr.SimFile('/dev/stdin', content=symbolic_input)
@@ -224,17 +282,15 @@ class Bof_Aeg(object):
 		state.libc.max_str_len = 0x100
 		state.libc.max_gets_size = 0x100 
 		state.libc.max_packet_size = 0x1000+0x100 # nginx case: buffer size + overflow 
-
-		# For mode of size 
-		state.globals["size"] = claripy.BVS('size', 64)
-		# For sprintf func
+		
+		# For sprintf func and recv
 		state.globals["r8"] = claripy.BVS('r8', 64)
 		state.globals["r9"] = claripy.BVS('r9', 64)
 
 		def log_func(s):
 			print("[log] rcx={}, rdx={}, r8={}, r9={}, rsp={}, rbp={}, rip={}".format(hex(s.solver.eval(s.regs.rcx)), hex(s.solver.eval(s.regs.rdx)),  hex(s.solver.eval(s.regs.r8)),  hex(s.solver.eval(s.regs.r9)), hex(s.solver.eval(s.regs.rsp)), hex(s.solver.eval(s.regs.rbp)), hex(s.solver.eval(s.regs.rip))))
-			self.stdin_buf_addr = s.solver.eval(s.regs.rcx) # for case of toy app 
-			self.recv_buf_addr = s.solver.eval(s.regs.rdx) # for case of nginx 
+			#self.stdin_buf_addr = s.solver.eval(s.regs.rcx) # for case of toy app 
+			#self.recv_buf_addr = s.solver.eval(s.regs.rdx) # for case of nginx 
 			self.size_addr = 0x7ffffc078 # manual for case of nginx
 			#IPython.embed()
 		
@@ -259,8 +315,6 @@ class Bof_Aeg(object):
 		simgr.explore(step_func=self.check_mem_corruption)
 		print("corrupt {} len={}".format(simgr.stashes['mem_corrupt'], len(simgr.stashes['mem_corrupt'])))
 	
-		if simgr.found:
-			print("ngx_recv found!")
 
 		if len(simgr.stashes['mem_corrupt'])==0:
 			self.overflow = False
@@ -269,7 +323,6 @@ class Bof_Aeg(object):
 
 		unconstrained_state = simgr.stashes['mem_corrupt'][-1]
 		unconstrained_state.solver.simplify()
-		self.vuln_addr = self.get_vuln_addr(unconstrained_state) 
 		self.state = unconstrained_state
 		constraints = unconstrained_state.solver.constraints
 		print(constraints)
@@ -281,29 +334,29 @@ class Bof_Aeg(object):
 		print("constraints = {}".format(minimum_constraints))
 		#IPython.embed()
 
+		'''
 		# Solve for command-line argument that will let us set RBP and RIP
 		solution = unconstrained_state.solver.eval(self.state.posix.stdin.content[0][0], cast_to=bytes)
 		#print("Command-line arg to hijack rip:", solution)
 		print("Hijacked-value to be placed at offset:", solution.index(rip_pattern.to_bytes(8, byteorder='little')))
 		#print(rip_pattern)
 
-		# to set vuln_addr=recv_addr
-		#self.nginx_config()
-
+		'''
 
 	def get_symbolic_var(self):
-		if self.mode=="continuous":
+		if self.mode=="gets":
 			return self.state.posix.stdin.content[0][0]
-		elif self.mode=="size":
-			return self.state.globals["size"]
-
+		elif self.mode=="recv":
+			return self.state.globals["r8"]
+		elif self.mode=="sprintf":
+			return self.state.globals[self.reg_id]
 
 	def write_analysis(self):
 		lines = [
 			str(self.overflow) + '\n',
-			hex(self.vuln_addr) + '\n',
+			hex(self.overflow_addr) + '\n',
 			self.mode + '\n',
-			hex(self.stdin_buf_addr) if self.mode=="continuous" else hex(self.size_addr)
+			self.reg_id + '\n',
 		]
 		with open('analysis', 'w') as f:
 			f.writelines(lines)
@@ -323,8 +376,8 @@ def main():
 	args = parser.parse_args()'''
 	if len(sys.argv) != 7:
 	  sys.exit("Not enough args")
+	global bin, regs, stack
 	bin = str(sys.argv[1])
-	global regs, stack
 	regs = str(sys.argv[2])
 	stack = str(sys.argv[3])
 	start_addr = int(sys.argv[4], 16)

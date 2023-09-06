@@ -163,17 +163,20 @@ def load_stdin_buf(filename):
 	print(processed_bytes)
 	return processed_bytes
 
-def load_size(filename):
-	with open(filename, 'r') as file:
-		lines = file.readlines()
-	hex_val = lines[0].split()[1]
-	val = int(hex_val, 16)
-	print("[load]size = {}".format(val))
-	return val
 
-def load_mode(filename):
+def load_analysis(filename):
 	with open(filename, 'r') as file:
 		lines = file.readlines()
-	line = lines[2].rstrip()
-	print(line) 
-	return line
+	mode = lines[2].rstrip()
+	reg_id = lines[3].rstrip()
+	return mode, reg_id
+
+
+def get_reg(filename, reg_id, ctype):
+	regs = parse_register_file(filename)
+	bytes_data = struct.pack('<Q', regs[reg_id])
+	if ctype=="double":
+		val = struct.unpack('d', bytes_data)[0]
+	elif ctype=="uint64_t":
+		val = struct.unpack('Q', bytes_data)[0]
+	return val

@@ -215,7 +215,7 @@ void dump_memory(HANDLE& hProcess, LPVOID var_addr, long long unsigned int var_s
 }
 
 
-bool detect_overflow(LPVOID start_addr, LPVOID end_addr, LPVOID base_addr, std::string &mode, LPVOID& vulnerable_virtual_addr, LPVOID& key_variable_virtual_addr){
+bool detect_overflow(LPVOID start_addr, LPVOID end_addr, LPVOID base_addr, std::string &mode, LPVOID& vulnerable_virtual_addr){
     /*char py_path[] = "overflow_detect.py";
     char stack_path[] = "stack";
     char regs_path[] = "registers";
@@ -276,15 +276,13 @@ bool detect_overflow(LPVOID start_addr, LPVOID end_addr, LPVOID base_addr, std::
     // Return analysis by reading file //
     std::ifstream file("analysis"); 
     std::string line[4];
-    for (int i=0; i<4; i++)
+    for (int i=0; i<3; i++)
         std::getline(file, line[i]);
 
     bool is_overflowed = (line[0]=="True");
     vulnerable_virtual_addr = GetVirtualAddrFromAngr(line[1].c_str()); // only instruction addr needs conversion
     mode = line[2];
-    unsigned long long hex_value = strtoull(line[3].c_str(), NULL, 16);
-    key_variable_virtual_addr = (LPVOID)hex_value;
-    std::cout << "key_variable_virtual_addr" <<key_variable_virtual_addr<<std::endl;
+    
 
     return is_overflowed;
 }
@@ -360,7 +358,7 @@ int main(int argc, char** argv)
     char originalJmpBytes[5]; // buffer of original 5 bytes for jmp 
     BYTE originalBpBytes[3]; // 0 for suspicious start address, 1 for vulnerable address, 2 for err handling
     // result of analysis //
-    LPVOID vulnerable_virtual_addr, key_variable_virtual_addr; 
+    LPVOID vulnerable_virtual_addr; 
     std::string mode;
 
     // Attach to the target process //
@@ -421,7 +419,7 @@ int main(int argc, char** argv)
 
                     bool is_vulnerable = detect_overflow( 
                         GetAngrAddrFromVirtual(suspicious_begin_virtual_addr), GetAngrAddrFromVirtual(suspicious_end_virtual_addr), angrTextBaseAddress,  // args
-                        mode, vulnerable_virtual_addr, key_variable_virtual_addr); // results
+                        mode, vulnerable_virtual_addr); // results
                     std::cout << "[detect overflow]vulnerable= "<< is_vulnerable << ", vulnerable_virtual_addr= " << vulnerable_virtual_addr << std::endl;
                     if (is_vulnerable){ // check if overflow will be triggered on vulnerable addr when vulnerability is detected 
                         
@@ -447,10 +445,10 @@ int main(int argc, char** argv)
                     ctx.EFlags |= 0x100; // set step mode
                     
 
-                    if (mode=="continuous")
-                        dump_memory(hProcess, key_variable_virtual_addr, 256); // stdin_buf_size=256, which supposes largest len of stdin is 256
-                    else if (mode=="size")
-                        dump_memory(hProcess, key_variable_virtual_addr, 8);  // suppose type of size is size_t, unsigned long long 
+                    if (mode=="gets")
+                        dump_memory(hProcess, (LPVOID)(uintptr_t)ctx.Rcx, 256); // rcx stores addr of buf // supposes largest len of stdin is 256
+                    else if (mode=="recv" || mode=="sprintf")
+                        dump_registers(&ctx);
 
                     bool is_triggered = check_overflow_satisfiability();
 
