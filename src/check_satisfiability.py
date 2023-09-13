@@ -5,13 +5,13 @@ import IPython
 
 num_input_chars = 256
 
-def satisfiable(bin, constraints, symbolic_input, concrete_input, mode):
+def satisfiable(bin, constraints, symbolic_input, concrete_input, bof_func):
 	project = angr.Project(bin)
 	state = project.factory.entry_state()
 	for c in constraints:
 		state.solver.add(c)
 
-	if mode=="gets":
+	if bof_func=="gets":
 		# reverse and pad with 0 due to big-endian of stdin in angr
 		#processing_input = input[::-1]
 		if (type(concrete_input)==str):
@@ -27,7 +27,7 @@ def satisfiable(bin, constraints, symbolic_input, concrete_input, mode):
 		#IPython.embed()
 		satisfiable = state.solver.satisfiable(extra_constraints=[symbolic_input==input_bvv])
 	
-	elif mode=="recv" or mode=="sprintf":
+	elif bof_func=="recv" or bof_func=="sprintf":
 		# concrete_input is a number to represent size of buf here 
 		# symbolic_input is a symbolic var of size in the constraint
 		# form a new constraint of symbolic_input==concrete_input to test satisfiability
@@ -54,16 +54,16 @@ if __name__ == "__main__":
 	constraints = load_state.load_constraints("constraints")
 	symbolic_input = load_state.load_symbolic_vars("symbolic_vars")
 	print("constraints={}".format(constraints))
-	mode, reg_id = load_state.load_analysis("analysis")
-	if mode=="gets":
+	bof_func, reg_id = load_state.load_analysis("analysis")
+	if bof_func=="gets":
 		concrete_input = load_state.load_stdin_buf("concrete_input")
-	elif mode=="recv":
+	elif bof_func=="recv":
 		concrete_input = load_state.get_reg("registers", "r8", "uint_64t") 
-	elif mode=="sprintf":
+	elif bof_func=="sprintf":
 		concrete_input = load_state.get_reg("registers", reg_id, "double") # for convinience
-
+	print(bof_func)
 	#IPython.embed()
 
-	satisfiable(bin, constraints, symbolic_input, concrete_input, mode)
+	satisfiable(bin, constraints, symbolic_input, concrete_input, bof_func)
 
 

@@ -167,9 +167,9 @@ def load_stdin_buf(filename):
 def load_analysis(filename):
 	with open(filename, 'r') as file:
 		lines = file.readlines()
-	mode = lines[2].rstrip()
+	bof_func = lines[2].rstrip()
 	reg_id = lines[3].rstrip()
-	return mode, reg_id
+	return bof_func, reg_id
 
 
 def get_reg(filename, reg_id, ctype):

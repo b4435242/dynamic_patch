@@ -11,8 +11,7 @@
 //#include <Python.h>
 
 
-LPVOID virtualTextBaseAddress, staticTextBaseAddress, angrTextBaseAddress;
-char* exe_path;
+
 
 DWORD GetProcessIdByName(const std::string processName)
 {
@@ -39,6 +38,93 @@ DWORD GetProcessIdByName(const std::string processName)
     CloseHandle(hSnapshot);
     return pid;
 }
+
+LPVOID GetVirtualDLLSectionBaseAddress(HANDLE& hProcess, const char* dllName){
+    // Search iteratively
+    HMODULE hModules[1024];
+    DWORD cbNeeded;
+    if (EnumProcessModules(hProcess, hModules, sizeof(hModules), &cbNeeded)) {
+        LPVOID baseAddress;
+        // Calculate the number of modules
+        int moduleCount = cbNeeded / sizeof(HMODULE);
+
+        for (int i = 0; i < moduleCount; i++) {
+            TCHAR buffer[64] = {0};
+            DWORD len = GetModuleBaseNameA(hProcess, hModules[i], buffer, sizeof(buffer)/sizeof(TCHAR));
+            if (len==0){
+                std::cerr << "Failed to get module name. Error code: " << GetLastError() << std::endl;
+                return NULL;
+            }
+            std::cout << "module name in buffer=" << buffer <<std::endl;
+            if (!strncmp(dllName, buffer, len)){
+                MODULEINFO moduleInfo;
+                if (GetModuleInformation(hProcess, hModules[i], &moduleInfo, sizeof(MODULEINFO))) {
+                    std::cout << "Module base address: " << moduleInfo.lpBaseOfDll << std::endl;
+                    std::cout << "Module size: " << moduleInfo.SizeOfImage << std::endl;
+                    baseAddress = moduleInfo.lpBaseOfDll;
+                } else {
+                    std::cerr << "Failed to get module information. Error code: " << GetLastError() << std::endl;
+                }
+            }
+        }
+        return baseAddress;
+    } else {
+        std::cerr << "Failed to enumerate modules. Error code: " << GetLastError() << std::endl;
+    }
+    return NULL;
+}
+
+LPVOID GetStaticDLLSectionBaseAddress(const char* dllFilePath){
+    // Replace this with the path to the DLL file
+    //const wchar_t* dllFilePath = L"YourModule.dll";
+
+    // Open the DLL file
+    HANDLE hFile = CreateFile(dllFilePath, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hFile == INVALID_HANDLE_VALUE) {
+        std::cerr << "Failed to open the DLL file. Error code: " << GetLastError() << std::endl;
+        return NULL;
+    }
+
+    // Read the DOS header to locate the PE header
+    IMAGE_DOS_HEADER dosHeader;
+    DWORD bytesRead;
+    if (!ReadFile(hFile, &dosHeader, sizeof(IMAGE_DOS_HEADER), &bytesRead, NULL) || bytesRead != sizeof(IMAGE_DOS_HEADER)) {
+        std::cerr << "Failed to read the DOS header. Error code: " << GetLastError() << std::endl;
+        CloseHandle(hFile);
+        return NULL;
+    }
+
+    // Check if this is a valid PE file
+    if (dosHeader.e_magic != IMAGE_DOS_SIGNATURE) {
+        std::cerr << "Not a valid PE file." << std::endl;
+        CloseHandle(hFile);
+        return NULL;
+    }
+
+    // Seek to the PE header
+    SetFilePointer(hFile, dosHeader.e_lfanew, NULL, FILE_BEGIN);
+
+    // Read the PE header
+    IMAGE_NT_HEADERS ntHeaders;
+    if (!ReadFile(hFile, &ntHeaders, sizeof(IMAGE_NT_HEADERS), &bytesRead, NULL) || bytesRead != sizeof(IMAGE_NT_HEADERS)) {
+        std::cerr << "Failed to read the PE header. Error code: " << GetLastError() << std::endl;
+        CloseHandle(hFile);
+        return NULL;
+    }
+
+    // Get the preferred base address from the PE header
+    LPVOID preferredBase = reinterpret_cast<LPVOID>(ntHeaders.OptionalHeader.ImageBase);
+
+    // Output the preferred base address
+    std::cout << "Preferred base address of the DLL: 0x" << std::hex << preferredBase << std::endl;
+
+    // Close the file handle
+    CloseHandle(hFile);
+
+    return preferredBase;
+
+}
+
 // Function to get the base address of the text section of an executable file
 LPVOID GetStaticTextSectionBaseAddress(const char* filePath)
 {
@@ -120,29 +206,31 @@ LPVOID GetVirtualTextSectionBaseAddress(DWORD processId)
     return nullptr;
 }
 
-LPVOID GetVirtualAddrFromStatic(char* addrInChar){
+LPVOID GetVirtualAddrFromStatic(LPVOID staticBaseAddress, LPVOID virtualBaseAddress, char* addrInChar){
+
     unsigned long long hex_value = strtoull(addrInChar, NULL, 16);
     LPVOID addr = (LPVOID)hex_value;
 
-    ptrdiff_t offset = reinterpret_cast<char*>(addr) - reinterpret_cast<char*>(staticTextBaseAddress);    
-    return reinterpret_cast<LPVOID>(reinterpret_cast<char*>(virtualTextBaseAddress) + offset);
+    ptrdiff_t offset = reinterpret_cast<char*>(addr) - reinterpret_cast<char*>(staticBaseAddress);    
+    return reinterpret_cast<LPVOID>(reinterpret_cast<char*>(virtualBaseAddress) + offset);
+    
 }
 
-LPVOID GetVirtualAddrFromAngr(const char* addrInChar){
+/*LPVOID GetVirtualAddrFromAngr(const char* addrInChar){
     unsigned long long hex_value = strtoull(addrInChar, NULL, 16);
     LPVOID addr = (LPVOID)hex_value;
 
-    ptrdiff_t offset = reinterpret_cast<char*>(addr) - reinterpret_cast<char*>(angrTextBaseAddress);    
-    return reinterpret_cast<LPVOID>(reinterpret_cast<char*>(virtualTextBaseAddress) + offset - 0x1000); // recover offset by minus 0x1000 back
+    ptrdiff_t offset = reinterpret_cast<char*>(addr) - reinterpret_cast<char*>(angrExeBaseAddress);    
+    return reinterpret_cast<LPVOID>(reinterpret_cast<char*>(virtualExeBaseAddress) + offset - 0x1000); // recover offset by minus 0x1000 back
 }
 
 LPVOID GetAngrAddrFromVirtual(LPVOID addr){
     //unsigned long long hex_value = strtoull(addrInChar, NULL, 16);
     //LPVOID addr = (LPVOID)hex_value;
 
-    ptrdiff_t offset = reinterpret_cast<char*>(addr) - reinterpret_cast<char*>(virtualTextBaseAddress);    
-    return reinterpret_cast<LPVOID>(reinterpret_cast<char*>(angrTextBaseAddress) + offset + 0x1000); // text offset is 0x1000 // 0x1000 for angr offset to locate right libc
-}
+    ptrdiff_t offset = reinterpret_cast<char*>(addr) - reinterpret_cast<char*>(virtualExeBaseAddress);    
+    return reinterpret_cast<LPVOID>(reinterpret_cast<char*>(angrExeBaseAddress) + offset + 0x1000); // text offset is 0x1000 // 0x1000 for angr offset to locate right libc
+}*/
 
 void dump_registers(CONTEXT* ctx) {
     std::ofstream file("registers");
@@ -215,7 +303,7 @@ void dump_memory(HANDLE& hProcess, LPVOID var_addr, long long unsigned int var_s
 }
 
 
-bool detect_overflow(LPVOID start_addr, LPVOID end_addr, LPVOID base_addr, std::string &mode, LPVOID& vulnerable_virtual_addr){
+bool detect_overflow(LPVOID start_addr, LPVOID end_addr, LPVOID base_addr, char* bin_path, char* bof_func, char* hook_len, LPVOID& vulnerable_virtual_addr){
     /*char py_path[] = "overflow_detect.py";
     char stack_path[] = "stack";
     char regs_path[] = "registers";
@@ -257,20 +345,23 @@ bool detect_overflow(LPVOID start_addr, LPVOID end_addr, LPVOID base_addr, std::
     fclose(fp);
     Py_Finalize();
     */
+    
     char start_addr_str[18], end_addr_str[18], base_addr_str[18];
-
     sprintf(start_addr_str, "0x%p", start_addr);
     sprintf(end_addr_str, "0x%p", end_addr);
     sprintf(base_addr_str, "0x%p", base_addr);
 
     std::string cmd;
     cmd += "python overflow_detect.py ";
-    cmd += std::string(exe_path) + " ";
+    cmd += std::string(bin_path) + " ";
+    cmd += std::string(bof_func) + " ";
+    cmd += std::string(hook_len) + " ";
     cmd += "registers ";
     cmd += "stack ";
     cmd += std::string(start_addr_str) + " ";
     cmd += std::string(end_addr_str) + " ";
     cmd += std::string(base_addr_str) + " ";
+
     int result = system(cmd.c_str());
     std::cout << cmd << ", ret =" << result << std::endl;
     // Return analysis by reading file //
@@ -280,14 +371,13 @@ bool detect_overflow(LPVOID start_addr, LPVOID end_addr, LPVOID base_addr, std::
         std::getline(file, line[i]);
 
     bool is_overflowed = (line[0]=="True");
-    vulnerable_virtual_addr = GetVirtualAddrFromAngr(line[1].c_str()); // only instruction addr needs conversion
-    mode = line[2];
+    vulnerable_virtual_addr = (LPVOID)strtoull(line[1].c_str(), NULL, 16); // only instruction addr needs conversion
     
 
     return is_overflowed;
 }
 
-bool check_overflow_satisfiability(){
+bool check_overflow_satisfiability(char* bin_path){
     /*char py_path[] = "check_satisfiability.py";
 
     int argc = 2;
@@ -313,7 +403,7 @@ bool check_overflow_satisfiability(){
     Py_Finalize();*/
     std::string cmd;
     cmd += "python check_satisfiability.py ";
-    cmd += std::string(exe_path);
+    cmd += std::string(bin_path);
     int result = system(cmd.c_str());
     std::cout<< cmd << ", ret ="<<result<<std::endl;
 
@@ -325,41 +415,36 @@ bool check_overflow_satisfiability(){
 }
 
 
+
+
 int main(int argc, char** argv)
 {
-	char* process_name = argv[1];
-    exe_path = argv[2]; // global
-    char* start_addr = argv[3];
-    char* end_addr = argv[4];
-    char* err_handling_addr = argv[5];
+    char* bof_section = argv[1]; // bof happens in "exe" or "dll"
+    char* bof_func = argv[2]; // name of function that causes buffer overflow
+    char* hook_len = argv[3]; // how many bytes of instruction calling bof func 
+    char* exe_name = argv[4];
+    char* exe_path = argv[5]; 
+    char* dll_name = argv[6]; 
+    char* dll_path = argv[7]; 
+    char* start_addr = argv[8]; // exe base or dll base
+    char* end_addr = argv[9]; // exe base or dll base
+    char* err_handling_addr = argv[10]; // default exe base
 
 
-	DWORD pid = GetProcessIdByName(std::string(process_name));
+
+	DWORD pid = GetProcessIdByName(std::string(exe_name));
 	printf("pid = %d\n", pid);
-
-    // Set base addresses for conversion //
-    angrTextBaseAddress = reinterpret_cast<LPVOID>(0x100400000); //0x400000
-    virtualTextBaseAddress = GetVirtualTextSectionBaseAddress(pid);
-    staticTextBaseAddress = GetStaticTextSectionBaseAddress(exe_path);
-    std::cout << "angrTextBaseAddress" << angrTextBaseAddress << std::endl;
-    std::cout << "virtualTextBaseAddress" << virtualTextBaseAddress << std::endl;
-    std::cout << "staticTextBaseAddress" << staticTextBaseAddress << std::endl;
-
-    // Convert static to virtual address //
-    LPVOID suspicious_begin_virtual_addr = GetVirtualAddrFromStatic(start_addr);
-    LPVOID suspicious_end_virtual_addr = GetVirtualAddrFromStatic(end_addr);
-    LPVOID err_handling_virtual_addr = GetVirtualAddrFromStatic(err_handling_addr);
-    
     
  
     DEBUG_EVENT debugEvent;
     HANDLE hThread;
     CONTEXT ctx;
     char originalJmpBytes[5]; // buffer of original 5 bytes for jmp 
+    char originalHookBytes[11]; // buffer of original 10 bytes for push addr, ret
     BYTE originalBpBytes[3]; // 0 for suspicious start address, 1 for vulnerable address, 2 for err handling
     // result of analysis //
     LPVOID vulnerable_virtual_addr; 
-    std::string mode;
+    bool repeated = false; // currently vulnerable_virtual_addr = suspicious_begin_virtual_addr
 
     // Attach to the target process //
     HANDLE hProcess = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid);
@@ -372,6 +457,37 @@ int main(int argc, char** argv)
         printf("Failed to debug to process\n");
         return 1;
     }
+
+    // Assign bin path and base addr to be exe or dll 
+    char* bin_path;
+    LPVOID virtual_base_addr, static_base_addr;
+    LPVOID virtual_exe_base_addr = GetVirtualTextSectionBaseAddress(pid);
+    LPVOID static_exe_base_addr = GetStaticTextSectionBaseAddress(exe_path);
+    if (!strcmp(bof_section, "exe")){
+        bin_path = exe_path;
+        virtual_base_addr = virtual_exe_base_addr;
+        static_base_addr = static_exe_base_addr;
+    }
+    else{
+        bin_path = dll_path;
+        virtual_base_addr = GetVirtualDLLSectionBaseAddress(hProcess, dll_name); 
+        static_base_addr = GetStaticDLLSectionBaseAddress(dll_path);
+        if (virtual_base_addr==NULL){
+            printf("DLL was not loaded to process yet\n");
+            return 1;
+        }
+    }
+    std::cout << "virtualBaseAddress" << virtual_base_addr << std::endl;
+    std::cout << "staticBaseAddress" << static_base_addr << std::endl;
+
+
+
+    // Convert static to virtual address //
+    LPVOID suspicious_begin_virtual_addr = GetVirtualAddrFromStatic(static_base_addr, virtual_base_addr, start_addr); // exe or dll
+    LPVOID suspicious_end_virtual_addr = GetVirtualAddrFromStatic(static_base_addr, virtual_base_addr, end_addr); // exe or dll
+    LPVOID err_handling_virtual_addr = GetVirtualAddrFromStatic(static_exe_base_addr, virtual_exe_base_addr, err_handling_addr); // exe
+    std::cout<< "suspicious_begin_virtual_addr" << suspicious_begin_virtual_addr << std::endl;
+    std::cout<< "err_handling_virtual_addr" << err_handling_virtual_addr << std::endl;
 
     // First setup breakpoint on suspicious point //
     BYTE breakpoint_opcode = 0xCC;
@@ -406,7 +522,7 @@ int main(int argc, char** argv)
                 ctx.Rip = (DWORD_PTR)debugEvent.u.Exception.ExceptionRecord.ExceptionAddress; 
 
 
-                if (debugEvent.u.Exception.ExceptionRecord.ExceptionAddress == suspicious_begin_virtual_addr) {
+                if (debugEvent.u.Exception.ExceptionRecord.ExceptionAddress == suspicious_begin_virtual_addr && !repeated) {
                     
                     if (!WriteProcessMemory(hProcess, suspicious_begin_virtual_addr, &originalBpBytes[0], 1, NULL)) { // Restore the original byte
                         printf("Failed to restore original byte, error code %d\n", GetLastError());
@@ -418,8 +534,8 @@ int main(int argc, char** argv)
                     dump_stack(&ctx, hProcess);
 
                     bool is_vulnerable = detect_overflow( 
-                        GetAngrAddrFromVirtual(suspicious_begin_virtual_addr), GetAngrAddrFromVirtual(suspicious_end_virtual_addr), angrTextBaseAddress,  // args
-                        mode, vulnerable_virtual_addr); // results
+                        suspicious_begin_virtual_addr, suspicious_end_virtual_addr, virtual_base_addr, bin_path, bof_func, hook_len, // args
+                        vulnerable_virtual_addr); // results
                     std::cout << "[detect overflow]vulnerable= "<< is_vulnerable << ", vulnerable_virtual_addr= " << vulnerable_virtual_addr << std::endl;
                     if (is_vulnerable){ // check if overflow will be triggered on vulnerable addr when vulnerability is detected 
                         
@@ -434,6 +550,7 @@ int main(int argc, char** argv)
                             CloseHandle(hProcess);
                         }
                     }
+                    repeated = true;
                     
                 } else if (debugEvent.u.Exception.ExceptionRecord.ExceptionAddress == vulnerable_virtual_addr){
                     std::cout<<"bp hitted on vul addr" << std::endl;
@@ -445,12 +562,12 @@ int main(int argc, char** argv)
                     ctx.EFlags |= 0x100; // set step mode
                     
 
-                    if (mode=="gets")
+                    if (bof_func=="gets")
                         dump_memory(hProcess, (LPVOID)(uintptr_t)ctx.Rcx, 256); // rcx stores addr of buf // supposes largest len of stdin is 256
-                    else if (mode=="recv" || mode=="sprintf")
+                    else if (bof_func=="recv" || bof_func=="sprintf")
                         dump_registers(&ctx);
 
-                    bool is_triggered = check_overflow_satisfiability();
+                    bool is_triggered = check_overflow_satisfiability(bin_path);
 
                     std::cout<<"is_triggered " <<is_triggered<<std::endl;
                     if (is_triggered){
@@ -464,6 +581,7 @@ int main(int argc, char** argv)
                             CloseHandle(hProcess);
                         }
                         // Redirect to err handler by hooking //                            
+                        /*
                         char patch[5]; // 5 bytes of jmp op + offset
                         auto src = reinterpret_cast<char*>(vulnerable_virtual_addr) + 5; 
                         auto dst = reinterpret_cast<char*>(err_handling_virtual_addr);
@@ -472,6 +590,15 @@ int main(int argc, char** argv)
                         memcpy(patch + 1, &relative_offset, 4);
                         ReadProcessMemory(hProcess, vulnerable_virtual_addr, originalJmpBytes, 5, NULL); // save the first 5 bytes
                         WriteProcessMemory(hProcess, (LPVOID)vulnerable_virtual_addr, patch, 5, NULL); // overwrite the first 5 bytes with a jump to err
+                        */
+                        char patch[11];
+
+                        memcpy(patch, "\x48", 1); // mov imm64 to rax
+                        memcpy(patch+1, err_handling_virtual_addr, 8);
+                        memcpy(patch+9, "\x50", 1); // push rax
+                        memcpy(patch+10, "\xC3", 1); // ret
+                        ReadProcessMemory(hProcess, vulnerable_virtual_addr, originalJmpBytes, 11, NULL); // save the first 5 bytes
+                        WriteProcessMemory(hProcess, (LPVOID)vulnerable_virtual_addr, patch, 11, NULL); // overwrite the first 5 bytes with a jump to err
                     }
 
                 } else if (debugEvent.u.Exception.ExceptionRecord.ExceptionAddress == err_handling_virtual_addr){

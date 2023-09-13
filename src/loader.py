@@ -8,9 +8,15 @@ def find_symbol(binary_path, symbol_name):
     binary = lief.parse(binary_path)
     base_address = binary.optional_header.imagebase
     print(base_address)
+
+    
+
+
+    
     # Iterate through the binary's symbols and find the one you're looking for
     symbol_address = None
     for symbol in binary.symbols:
+        print(symbol)
         if symbol.name == symbol_name:
             symbol_address = symbol.value
             break

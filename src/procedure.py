@@ -96,6 +96,7 @@ class sprintf(FormatParser):
 	def run(self, dst_ptr, fmt):  # pylint:disable=unused-argument
 		# Angr treats all args as args of fmt, so manually pop 2 args for dst_ptr and fmt
 		# Originally assign from calling convetion rcx and rdx
+
 		va_arg = self.va_arg
 		fmt = va_arg("void*") #fmt = self.state.regs.rdx
 		dst_ptr = va_arg("void*") #dst_ptr = self.state.regs.rcx
@@ -108,10 +109,10 @@ class sprintf(FormatParser):
 		print("[sprintf] fmt={}".format(fmt))
 		print("[sprintf] dst_ptr={}".format(dst_ptr))
 
+
 		# The format str is at index 1
 		fmt_str = self._parse(fmt)
 
-		
 		# implementation of replace
 		def replace():
 			string = None
@@ -213,4 +214,12 @@ class sprintf(FormatParser):
 			dst_ptr + (out_str.size() // self.arch.byte_width), self.state.solver.BVV(0, self.arch.byte_width)
 		)
 		
-		return out_str.size() // self.arch.byte_width
+		print("[sprintf]rip={}".format(self.state.regs.rip))
+		
+		# ret to unexpected address cuz hook simprocedure on addr, which works well with hook on symbol #
+		# workaround: jump to next instruction
+		self.jump(self.state.addr+self.state.globals["hook_len"])
+		#return out_str.size() // self.arch.byte_width	
+
+
+
