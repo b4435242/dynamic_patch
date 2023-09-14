@@ -58,7 +58,7 @@ if __name__ == "__main__":
 	if bof_func=="gets":
 		concrete_input = load_state.load_stdin_buf("concrete_input")
 	elif bof_func=="recv":
-		concrete_input = load_state.get_reg("registers", "r8", "uint_64t") 
+		concrete_input = load_state.get_reg("registers", "r8", "uint64_t") 
 	elif bof_func=="sprintf":
 		concrete_input = load_state.get_reg("registers", reg_id, "double") # for convinience
 	print(bof_func)

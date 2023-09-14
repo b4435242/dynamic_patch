@@ -31,7 +31,6 @@ class Bof_Aeg(object):
 		self.bof_func = bof_func
 		self.hook_len = hook_len
 
-		self.cve_2021_3177_config()
 
 
 	def toy_hook(self):
@@ -47,6 +46,15 @@ class Bof_Aeg(object):
 	def cve_2021_3177_config(self):
 		#cc = self.project.factory.cc_from_arg_kinds((True, True), ret_fp=True)
 		self.project.hook(self.start_addr, procedure.sprintf())
+
+	def hook_setup(self, state):
+		state.globals["hook_len"] = self.hook_len
+		if self.bof_func=="get":
+			self.project.hook(self.start_addr, procedure.gets()) # simprocedure
+		elif self.bof_func=="recv":
+			self.project.hook(self.start_addr, procedure.recv, length=self.hook_len) # user hook
+		elif self.bof_func=="sprintf":
+			self.project.hook(self.start_addr, procedure.sprintf()) # simprocedure
 
 	def is_unconstrained(self, m, constraints, start_addr):
 		
@@ -286,6 +294,7 @@ class Bof_Aeg(object):
 		load_state.set_stack(state, stack)
 		print("rsp={}, rbp={}".format(state.regs.rsp, state.regs.rbp))
 		
+		self.hook_setup(state)
 
 
 		state.libc.buf_symbolic_bytes = 0x100

@@ -73,7 +73,7 @@ class gets(angr.SimProcedure):
 
 
 		
-def ngx_recv(state):
+def recv(state):
 	dst = state.regs.rdx
 	fd = 0
 	simfd = state.posix.get_fd(fd)

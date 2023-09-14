@@ -126,7 +126,7 @@ LPVOID GetStaticDLLSectionBaseAddress(const char* dllFilePath){
 }
 
 // Function to get the base address of the text section of an executable file
-LPVOID GetStaticTextSectionBaseAddress(const char* filePath)
+LPVOID GetStaticExeTextSectionBaseAddress(const char* filePath)
 {
     char cmd[512];
     snprintf(cmd, sizeof(cmd), "objdump -h %s", filePath);
@@ -149,10 +149,10 @@ LPVOID GetStaticTextSectionBaseAddress(const char* filePath)
             {
                 addressStr = strtok(nullptr, " ");
             }
-            LPVOID baseAddress = (LPVOID)strtoull(addressStr, nullptr, 16);
-
+            LPVOID textBaseAddress = (LPVOID)strtoull(addressStr, nullptr, 16);
+            //LPVOID exeBaseAddress = reinterpret_cast<LPVOID>(reinterpret_cast<char*>(textBaseAddress)-0x1000);
             pclose(fp);
-            return baseAddress;
+            return textBaseAddress;
         }
     }
 
@@ -161,7 +161,7 @@ LPVOID GetStaticTextSectionBaseAddress(const char* filePath)
 }
 
 // Function to get the base address of the text section of a given process
-LPVOID GetVirtualTextSectionBaseAddress(DWORD processId)
+LPVOID GetVirtualExeTextSectionBaseAddress(DWORD processId)
 {
     
     LPVOID baseAddress = 0;
@@ -345,7 +345,8 @@ bool detect_overflow(LPVOID start_addr, LPVOID end_addr, LPVOID base_addr, char*
     fclose(fp);
     Py_Finalize();
     */
-    
+
+
     char start_addr_str[18], end_addr_str[18], base_addr_str[18];
     sprintf(start_addr_str, "0x%p", start_addr);
     sprintf(end_addr_str, "0x%p", end_addr);
@@ -361,7 +362,7 @@ bool detect_overflow(LPVOID start_addr, LPVOID end_addr, LPVOID base_addr, char*
     cmd += std::string(start_addr_str) + " ";
     cmd += std::string(end_addr_str) + " ";
     cmd += std::string(base_addr_str) + " ";
-
+    std::cout << cmd << std::endl;
     int result = system(cmd.c_str());
     std::cout << cmd << ", ret =" << result << std::endl;
     // Return analysis by reading file //
@@ -461,12 +462,14 @@ int main(int argc, char** argv)
     // Assign bin path and base addr to be exe or dll 
     char* bin_path;
     LPVOID virtual_base_addr, static_base_addr;
-    LPVOID virtual_exe_base_addr = GetVirtualTextSectionBaseAddress(pid);
-    LPVOID static_exe_base_addr = GetStaticTextSectionBaseAddress(exe_path);
+    LPVOID virtual_exe_base_addr = GetVirtualExeTextSectionBaseAddress(pid);
+    LPVOID static_exe_base_addr = GetStaticExeTextSectionBaseAddress(exe_path);
+    LPVOID angr_base_addr;
     if (!strcmp(bof_section, "exe")){
         bin_path = exe_path;
         virtual_base_addr = virtual_exe_base_addr;
         static_base_addr = static_exe_base_addr;
+        angr_base_addr = reinterpret_cast<LPVOID>(reinterpret_cast<char*>(virtual_base_addr)-0x1000); // exe contains 0x1000 length of DOS header
     }
     else{
         bin_path = dll_path;
@@ -476,6 +479,7 @@ int main(int argc, char** argv)
             printf("DLL was not loaded to process yet\n");
             return 1;
         }
+        angr_base_addr = virtual_base_addr;
     }
     std::cout << "virtualBaseAddress" << virtual_base_addr << std::endl;
     std::cout << "staticBaseAddress" << static_base_addr << std::endl;
@@ -533,8 +537,10 @@ int main(int argc, char** argv)
                     dump_registers(&ctx); // prepare for env of symbolic execution
                     dump_stack(&ctx, hProcess);
 
+
+
                     bool is_vulnerable = detect_overflow( 
-                        suspicious_begin_virtual_addr, suspicious_end_virtual_addr, virtual_base_addr, bin_path, bof_func, hook_len, // args
+                        suspicious_begin_virtual_addr, suspicious_end_virtual_addr, angr_base_addr, bin_path, bof_func, hook_len, // args
                         vulnerable_virtual_addr); // results
                     std::cout << "[detect overflow]vulnerable= "<< is_vulnerable << ", vulnerable_virtual_addr= " << vulnerable_virtual_addr << std::endl;
                     if (is_vulnerable){ // check if overflow will be triggered on vulnerable addr when vulnerability is detected 
