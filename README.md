@@ -1,10 +1,8 @@
 # Dynamic Patch
 
 ## Intro
-Prevent from a known stack buffer overflow attack to become RCE. Reproduce the path of crash in Angr, and get the condition of it to prevent attack.  
-Debugger is for breakpoint, context dump, and memory operation of target process.  
-Python is to analyze vulnerability with Angr.  
-Analysis of vulnerability will be needed to apply this tool.  
+Prevent from a known stack buffer overflow attack to become RCE. Reproduce the path of crash in Angr, and get the condition of it to prevent attack. Debugger is for breakpoint, context dump, and memory operation of target process. Python is to analyze vulnerability with Angr.  
+**Analysis of vulnerability will be needed to apply this tool.**  
 
 
 ## Usage
