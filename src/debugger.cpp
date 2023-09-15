@@ -440,8 +440,8 @@ int main(int argc, char** argv)
     DEBUG_EVENT debugEvent;
     HANDLE hThread;
     CONTEXT ctx;
-    char originalJmpBytes[5]; // buffer of original 5 bytes for jmp 
-    char originalHookBytes[11]; // buffer of original 10 bytes for push addr, ret
+    //char originalJmpBytes[5]; // buffer of original 5 bytes for jmp 
+    char originalHookBytes[12]; // buffer of original 12 bytes far jmp
     BYTE originalBpBytes[3]; // 0 for suspicious start address, 1 for vulnerable address, 2 for err handling
     // result of analysis //
     LPVOID vulnerable_virtual_addr; 
@@ -594,22 +594,24 @@ int main(int argc, char** argv)
                         DWORD* relative_offset = (DWORD*)(dst-src); 
                         memcpy(patch, "\xE9", 1); // jmp opcode
                         memcpy(patch + 1, &relative_offset, 4);
-                        ReadProcessMemory(hProcess, vulnerable_virtual_addr, originalJmpBytes, 5, NULL); // save the first 5 bytes
+                        ReadProcessMemory(hProcess, vulnerable_virtual_addr, originalHookBytes, 5, NULL); // save the first 5 bytes
                         WriteProcessMemory(hProcess, (LPVOID)vulnerable_virtual_addr, patch, 5, NULL); // overwrite the first 5 bytes with a jump to err
                         */
-                        char patch[11];
+                        /*
+                        char patch[12];
 
-                        memcpy(patch, "\x48", 1); // mov imm64 to rax
-                        memcpy(patch+1, err_handling_virtual_addr, 8);
-                        memcpy(patch+9, "\x50", 1); // push rax
-                        memcpy(patch+10, "\xC3", 1); // ret
-                        ReadProcessMemory(hProcess, vulnerable_virtual_addr, originalJmpBytes, 11, NULL); // save the first 5 bytes
-                        WriteProcessMemory(hProcess, (LPVOID)vulnerable_virtual_addr, patch, 11, NULL); // overwrite the first 5 bytes with a jump to err
+                        memcpy(patch, "\x48\xB8", 2); // mov imm64 to rax
+                        memcpy(patch+2, &err_handling_virtual_addr, 8);
+                        memcpy(patch+10, "\xFF\xE0", 2); // push rax
+                        ReadProcessMemory(hProcess, vulnerable_virtual_addr, originalHookBytes, 12, NULL); // save the first 11 bytes
+                        WriteProcessMemory(hProcess, (LPVOID)vulnerable_virtual_addr, patch, 12, NULL); // overwrite the first 11 bytes with a jump to err
+                        */
+                        break; // directly exit
                     }
 
                 } else if (debugEvent.u.Exception.ExceptionRecord.ExceptionAddress == err_handling_virtual_addr){
                     std::cout<<"[err handler] bp hitted " <<std::endl;
-                    WriteProcessMemory(hProcess, (LPVOID)vulnerable_virtual_addr, &originalJmpBytes, 5, NULL); // unhook to avoid infinite triggering
+                    WriteProcessMemory(hProcess, (LPVOID)vulnerable_virtual_addr, &originalHookBytes, 12, NULL); // unhook to avoid infinite triggering
                     WriteProcessMemory(hProcess, err_handling_virtual_addr, &originalBpBytes[2], 1, NULL); // cancel bp
                     
                 }
