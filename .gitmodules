@@ -1,0 +1,7 @@
+[submodule "nginx/"]
+	url = https://github.com/b4435242/nginx.git
+[submodule "https://github.com/b4435242/nginx.git"]
+	url = nginx
+[submodule "test/CVE-2013-2028/nginx"]
+	path = test/CVE-2013-2028/nginx
+	url = https://github.com/b4435242/nginx.git
