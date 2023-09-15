@@ -364,7 +364,7 @@ bool check_overflow_satisfiability(char* bin_path){
 
 int main(int argc, char** argv)
 {
-    char* bof_section = argv[1]; // bof happens in "exe" or "dll"
+    char* bof_binary = argv[1]; // bof happens in "exe" or "dll"
     char* bof_func = argv[2]; // name of function that causes buffer overflow
     char* hook_len = argv[3]; // how many bytes of instruction calling bof func 
     char* exe_name = argv[4];
@@ -409,7 +409,7 @@ int main(int argc, char** argv)
     LPVOID virtual_exe_base_addr = GetVirtualExeTextSectionBaseAddress(pid);
     LPVOID static_exe_base_addr = GetStaticExeTextSectionBaseAddress(exe_path);
     LPVOID angr_base_addr;
-    if (!strcmp(bof_section, "exe")){
+    if (!strcmp(bof_binary, "exe")){
         bin_path = exe_path;
         virtual_base_addr = virtual_exe_base_addr;
         static_base_addr = static_exe_base_addr;
