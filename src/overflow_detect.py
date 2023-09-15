@@ -5,7 +5,6 @@ import struct
 import procedure
 import  math
 from decimal import *
-import loader
 
 from angr.misc.ux import once
 import logging
@@ -35,17 +34,6 @@ class Bof_Aeg(object):
 
 	def toy_hook(self):
 		self.project.hook_symbol('gets', procedure.gets())
-
-	def cve_2013_2028_config(self):
-		self.recv_addr = 0x1004554b8
-		self.project.hook(self.recv_addr, hook=procedure.ngx_recv, length=3)	# replace call r->connection->recv
-		self.size_addr = 0x7ffffc078 # manual for case of nginx
-		# segmentation fault if vuln_addr set at ret
-		# call before write_analysis to set vuln_addr manually
-
-	def cve_2021_3177_config(self):
-		#cc = self.project.factory.cc_from_arg_kinds((True, True), ret_fp=True)
-		self.project.hook(self.start_addr, procedure.sprintf())
 
 	def hook_setup(self, state):
 		state.globals["hook_len"] = self.hook_len
@@ -311,9 +299,6 @@ class Bof_Aeg(object):
 
 		def log_func(s):
 			print("[log] rcx={}, rdx={}, r8={}, r9={}, rsp={}, rbp={}, rip={}".format(hex(s.solver.eval(s.regs.rcx)), hex(s.solver.eval(s.regs.rdx)),  hex(s.solver.eval(s.regs.r8)),  hex(s.solver.eval(s.regs.r9)), hex(s.solver.eval(s.regs.rsp)), hex(s.solver.eval(s.regs.rbp)), hex(s.solver.eval(s.regs.rip))))
-			#self.stdin_buf_addr = s.solver.eval(s.regs.rcx) # for case of toy app 
-			#self.recv_buf_addr = s.solver.eval(s.regs.rdx) # for case of nginx 
-			self.size_addr = 0x7ffffc078 # manual for case of nginx
 			#IPython.embed()
 		
 
@@ -377,11 +362,11 @@ class Bof_Aeg(object):
 			str(self.bof_func) + '\n',
 			self.reg_id + '\n',
 		]
-		with open('analysis', 'w') as f:
+		with open('tmp/analysis', 'w') as f:
 			f.writelines(lines)
 		if self.overflow:
-			load_state.dump_constraints(self.minimum_constraints, "constraints")
-			load_state.dump_symbolic_vars(self.get_symbolic_var(), "symbolic_vars")
+			load_state.dump_constraints(self.minimum_constraints, "tmp/constraints")
+			load_state.dump_symbolic_vars(self.get_symbolic_var(), "tmp/symbolic_vars")
 
 def main():
 	

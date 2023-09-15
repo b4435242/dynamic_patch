@@ -100,7 +100,7 @@ def set_regs(state, regs_path):
 
 def parse_stack_file(stack_path):
 	# Open stack dump file
-	with open("stack", "r") as f:
+	with open(stack_path, "r") as f:
 		stack_dump = f.read()
 
 	# Define regex pattern to match address and value

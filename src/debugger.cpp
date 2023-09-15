@@ -216,24 +216,10 @@ LPVOID GetVirtualAddrFromStatic(LPVOID staticBaseAddress, LPVOID virtualBaseAddr
     
 }
 
-/*LPVOID GetVirtualAddrFromAngr(const char* addrInChar){
-    unsigned long long hex_value = strtoull(addrInChar, NULL, 16);
-    LPVOID addr = (LPVOID)hex_value;
 
-    ptrdiff_t offset = reinterpret_cast<char*>(addr) - reinterpret_cast<char*>(angrExeBaseAddress);    
-    return reinterpret_cast<LPVOID>(reinterpret_cast<char*>(virtualExeBaseAddress) + offset - 0x1000); // recover offset by minus 0x1000 back
-}
-
-LPVOID GetAngrAddrFromVirtual(LPVOID addr){
-    //unsigned long long hex_value = strtoull(addrInChar, NULL, 16);
-    //LPVOID addr = (LPVOID)hex_value;
-
-    ptrdiff_t offset = reinterpret_cast<char*>(addr) - reinterpret_cast<char*>(virtualExeBaseAddress);    
-    return reinterpret_cast<LPVOID>(reinterpret_cast<char*>(angrExeBaseAddress) + offset + 0x1000); // text offset is 0x1000 // 0x1000 for angr offset to locate right libc
-}*/
 
 void dump_registers(CONTEXT* ctx) {
-    std::ofstream file("registers");
+    std::ofstream file("tmp/registers");
 
     if (file.is_open()) {
         file << "RAX: 0x" << std::hex << ctx->Rax << "\n";
@@ -261,7 +247,7 @@ void dump_registers(CONTEXT* ctx) {
 
 void dump_stack(CONTEXT* ctx, HANDLE& hProcess)
 {
-    std::ofstream file("stack");
+    std::ofstream file("tmp/stack");
 
     DWORD_PTR stack_top = ctx->Rsp;
     DWORD_PTR stack_bottom = ctx->Rbp + 0x1010 + 0x10; // nginx offset and rbp/rip offset // Not sure why $rbp doesn't point at bottom 
@@ -282,7 +268,7 @@ void dump_stack(CONTEXT* ctx, HANDLE& hProcess)
 }
 
 void dump_memory(HANDLE& hProcess, LPVOID var_addr, long long unsigned int var_size){
-    std::ofstream file("concrete_input");
+    std::ofstream file("tmp/concrete_input");
 
     DWORD_PTR stack_top = reinterpret_cast<DWORD_PTR>(var_addr);
     DWORD_PTR stack_bottom = stack_top+reinterpret_cast<DWORD_PTR>(var_size);
@@ -304,48 +290,6 @@ void dump_memory(HANDLE& hProcess, LPVOID var_addr, long long unsigned int var_s
 
 
 bool detect_overflow(LPVOID start_addr, LPVOID end_addr, LPVOID base_addr, char* bin_path, char* bof_func, char* hook_len, LPVOID& vulnerable_virtual_addr){
-    /*char py_path[] = "overflow_detect.py";
-    char stack_path[] = "stack";
-    char regs_path[] = "registers";
-    char start_addr_str[18], end_addr_str[18], base_addr_str[18];
-
-    sprintf(start_addr_str, "0x%p", start_addr);
-    sprintf(end_addr_str, "0x%p", end_addr);
-    sprintf(base_addr_str, "0x%p", base_addr);
-
-    int argc = 7;
-    char* argv[7];
-
-    argv[0] = py_path;
-    argv[1] = exe_path;
-    argv[2] = regs_path;
-    argv[3] = stack_path;
-    argv[4] = start_addr_str;
-    argv[5] = end_addr_str;
-    argv[6] = base_addr_str;
-
-    wchar_t **changed_argv;
-    changed_argv = new wchar_t*[argc];
-
-    for (int i = 0; i < argc; i++)
-    {
-        changed_argv[i] = new wchar_t[strlen(argv[i]) + 1];
-        mbstowcs(changed_argv[i], argv[i], strlen(argv[i]) + 1);
-    }
-
-
-    Py_Initialize();
-    //FILE* python_stdout = fopen("python_stdout.txt", "w");
-    //PySys_SetObject("stdout", PyFile_FromFd(fileno(python_stdout), "python_stdout.txt", "w", -1, NULL, NULL, NULL, 1));
-
-
-    PySys_SetArgv(argc, changed_argv);
-    FILE* fp = fopen(py_path, "r");
-    PyRun_SimpleFile(fp, py_path);
-    fclose(fp);
-    Py_Finalize();
-    */
-
 
     char start_addr_str[18], end_addr_str[18], base_addr_str[18];
     sprintf(start_addr_str, "0x%p", start_addr);
@@ -357,8 +301,8 @@ bool detect_overflow(LPVOID start_addr, LPVOID end_addr, LPVOID base_addr, char*
     cmd += std::string(bin_path) + " ";
     cmd += std::string(bof_func) + " ";
     cmd += std::string(hook_len) + " ";
-    cmd += "registers ";
-    cmd += "stack ";
+    cmd += "tmp/registers ";
+    cmd += "tmp/stack ";
     cmd += std::string(start_addr_str) + " ";
     cmd += std::string(end_addr_str) + " ";
     cmd += std::string(base_addr_str) + " ";
@@ -366,7 +310,7 @@ bool detect_overflow(LPVOID start_addr, LPVOID end_addr, LPVOID base_addr, char*
     int result = system(cmd.c_str());
     std::cout << cmd << ", ret =" << result << std::endl;
     // Return analysis by reading file //
-    std::ifstream file("analysis"); 
+    std::ifstream file("tmp/analysis"); 
     std::string line[4];
     for (int i=0; i<3; i++)
         std::getline(file, line[i]);
@@ -408,7 +352,7 @@ bool check_overflow_satisfiability(char* bin_path){
     int result = system(cmd.c_str());
     std::cout<< cmd << ", ret ="<<result<<std::endl;
 
-    std::ifstream file("satisfiabililty"); 
+    std::ifstream file("tmp/satisfiabililty"); 
     std::string line;
     std::getline(file, line);
     bool is_triggered = (line=="True");

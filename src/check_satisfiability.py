@@ -44,23 +44,23 @@ def satisfiable(bin, constraints, symbolic_input, concrete_input, bof_func):
 	else:
 		print("{} does not satisfy the stdin constraints.".format(input))	
 
-	with open("satisfiabililty", "w") as f:
+	with open("tmp/satisfiabililty", "w") as f:
 		f.write(str(satisfiable))
 
 
 if __name__ == "__main__":
 
 	bin = str(sys.argv[1])
-	constraints = load_state.load_constraints("constraints")
-	symbolic_input = load_state.load_symbolic_vars("symbolic_vars")
+	constraints = load_state.load_constraints("tmp/constraints")
+	symbolic_input = load_state.load_symbolic_vars("tmp/symbolic_vars")
 	print("constraints={}".format(constraints))
-	bof_func, reg_id = load_state.load_analysis("analysis")
+	bof_func, reg_id = load_state.load_analysis("tmp/analysis")
 	if bof_func=="gets":
-		concrete_input = load_state.load_stdin_buf("concrete_input")
+		concrete_input = load_state.load_stdin_buf("tmp/concrete_input")
 	elif bof_func=="recv":
-		concrete_input = load_state.get_reg("registers", "r8", "uint64_t") 
+		concrete_input = load_state.get_reg("tmp/registers", "r8", "uint64_t") 
 	elif bof_func=="sprintf":
-		concrete_input = load_state.get_reg("registers", reg_id, "double") # for convinience
+		concrete_input = load_state.get_reg("tmp/registers", reg_id, "double") # for convinience
 	print(bof_func)
 	#IPython.embed()
 
