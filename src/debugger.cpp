@@ -502,7 +502,8 @@ int main(int argc, char** argv)
                     }
                     repeated = true;
                     
-                } else if (debugEvent.u.Exception.ExceptionRecord.ExceptionAddress == vulnerable_virtual_addr){
+                } 
+                if (debugEvent.u.Exception.ExceptionRecord.ExceptionAddress == vulnerable_virtual_addr && repeated){
                     std::cout<<"bp hitted on vul addr" << std::endl;
                     // Set bp on vulnerable address infinitely //
                     if (!WriteProcessMemory(hProcess, vulnerable_virtual_addr, &originalBpBytes[1], 1, NULL)) { // Restore the original byte
