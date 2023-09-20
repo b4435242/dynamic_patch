@@ -8,9 +8,12 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-//#include <Python.h>
+#include <chrono>
+#include <filesystem>
 
 
+#define PY_SSIZE_T_CLEAN
+#include <Python.h>
 
 
 DWORD GetProcessIdByName(const std::string processName)
@@ -322,44 +325,66 @@ bool detect_overflow(LPVOID start_addr, LPVOID end_addr, LPVOID base_addr, char*
     return is_overflowed;
 }
 
-bool check_overflow_satisfiability(char* bin_path){
-    /*char py_path[] = "check_satisfiability.py";
+bool check_overflow_satisfiability(){
+    int res;
+    static PyObject* myModuleString = PyUnicode_FromString((char*)"check_satisfiability");
+    static PyObject* myModule = PyImport_Import(myModuleString);
+    if (myModule != NULL) {
+        static PyObject* myFunction = PyObject_GetAttrString(myModule, "check_satisfiability");
+        if (myFunction && PyCallable_Check(myFunction)) {
+            // Call the function
+            PyObject* result = PyObject_CallObject(myFunction, NULL);
+            if (result != NULL) {
+                res = PyObject_IsTrue(result);
+                //printf("Python function returned: %d\n", res);
 
-    int argc = 2;
-    char* argv[2];
-    argv[0] = py_path;
-    argv[1] = exe_path;
-
-    wchar_t **changed_argv;
-    changed_argv = new wchar_t*[argc];
-
-    for (int i = 0; i < argc; i++)
-    {
-        changed_argv[i] = new wchar_t[strlen(argv[i]) + 1];
-        mbstowcs(changed_argv[i], argv[i], strlen(argv[i]) + 1);
+            }
+        }
     }
 
-
-    Py_Initialize();
-    PySys_SetArgv(argc, changed_argv);
-    FILE* fp = fopen(py_path, "r");
-    PyRun_SimpleFile(fp, py_path);
-    fclose(fp);
-    Py_Finalize();*/
-    std::string cmd;
-    cmd += "python check_satisfiability.py ";
-    cmd += std::string(bin_path);
-    int result = system(cmd.c_str());
-    std::cout<< cmd << ", ret ="<<result<<std::endl;
-
-    std::ifstream file("tmp/satisfiabililty"); 
-    std::string line;
-    std::getline(file, line);
-    bool is_triggered = (line=="True");
-    return is_triggered;
+    return res;
 }
 
+bool is_constraints_existed(char* exe_name){
+    bool res = false;
+    
+    // create dir if not existed
+    const std::string directory_path = "tmp";
+    if (!std::filesystem::exists(directory_path))
+        std::filesystem::create_directory(directory_path);
 
+    char file_path[] = "tmp/exe_name";
+    // check if constraints is for the same application
+    FILE* file = fopen(file_path, "r");
+    if (file != NULL) {
+        char line[64];
+        fgets(line, sizeof(line), file);
+        res = !strcmp(exe_name, line);
+    }
+    fclose(file);
+    
+    // update exe name if it's different
+    if (!res){
+        file = fopen(file_path, "w");
+        fprintf(file, "%s", exe_name);
+        fclose(file);
+    }
+
+    return res;
+}
+
+LPVOID init_vulnerable_virtual_addr(){
+    LPVOID vulnerable_virtual_addr;
+    char file_path[] = "tmp/analysis";
+    FILE* file = fopen(file_path, "r");
+    // convert 2nd line to LPVOID
+    char line[64];
+    fgets(line, sizeof(line), file);
+    fgets(line, sizeof(line), file);
+    vulnerable_virtual_addr = (LPVOID)strtoull(line, NULL, 16);
+    fclose(file);
+    return vulnerable_virtual_addr;
+}
 
 
 int main(int argc, char** argv)
@@ -380,6 +405,9 @@ int main(int argc, char** argv)
 	DWORD pid = GetProcessIdByName(std::string(exe_name));
 	printf("pid = %d\n", pid);
     
+
+    Py_Initialize();
+
  
     DEBUG_EVENT debugEvent;
     HANDLE hThread;
@@ -389,8 +417,8 @@ int main(int argc, char** argv)
     BYTE originalBpBytes[3]; // 0 for suspicious start address, 1 for vulnerable address, 2 for err handling
     // result of analysis //
     LPVOID vulnerable_virtual_addr; 
-    bool repeated = false; // currently vulnerable_virtual_addr = suspicious_begin_virtual_addr
-
+    bool is_constraints_solved = is_constraints_existed(exe_name);
+    
     // Attach to the target process //
     HANDLE hProcess = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid);
     if (hProcess == NULL) {
@@ -437,6 +465,8 @@ int main(int argc, char** argv)
     std::cout<< "suspicious_begin_virtual_addr" << suspicious_begin_virtual_addr << std::endl;
     std::cout<< "err_handling_virtual_addr" << err_handling_virtual_addr << std::endl;
 
+
+
     // First setup breakpoint on suspicious point //
     BYTE breakpoint_opcode = 0xCC;
     if (!ReadProcessMemory(hProcess, suspicious_begin_virtual_addr, &originalBpBytes[0], 1, NULL)) { // Save the original byte for recovering
@@ -447,6 +477,16 @@ int main(int argc, char** argv)
         printf("Failed to set breakpoint\n");
         CloseHandle(hProcess);
     }
+
+    // init some var if constraints are already solved
+    if (is_constraints_solved){
+        vulnerable_virtual_addr = suspicious_begin_virtual_addr; // currently set vulnerable_virtual_addr = suspicious_begin_virtual_addr  //init_vulnerable_virtual_addr(); // read from analysis
+        originalBpBytes[1] = originalBpBytes[0]; // directly go check_satisfiability
+    }
+
+    // elapsed time 
+    //auto start = std::chrono::high_resolution_clock::now();
+    //auto end = start;
 
     // 1. Run overflow detection once //
     // 2. Run overflow triggered infinite times if finding a vulnerability in 1. //
@@ -470,14 +510,14 @@ int main(int argc, char** argv)
                 ctx.Rip = (DWORD_PTR)debugEvent.u.Exception.ExceptionRecord.ExceptionAddress; 
 
 
-                if (debugEvent.u.Exception.ExceptionRecord.ExceptionAddress == suspicious_begin_virtual_addr && !repeated) {
+                if (debugEvent.u.Exception.ExceptionRecord.ExceptionAddress == suspicious_begin_virtual_addr && !is_constraints_solved) {
                     
                     if (!WriteProcessMemory(hProcess, suspicious_begin_virtual_addr, &originalBpBytes[0], 1, NULL)) { // Restore the original byte
                         printf("Failed to restore original byte, error code %d\n", GetLastError());
                         CloseHandle(hProcess);
                     }
                                           
-                    std::cout<<"[sus bp] hit"<<std::endl;
+                    //std::cout<<"[sus bp] hit"<<std::endl;
                     dump_registers(&ctx); // prepare for env of symbolic execution
                     dump_stack(&ctx, hProcess);
 
@@ -486,7 +526,10 @@ int main(int argc, char** argv)
                     bool is_vulnerable = detect_overflow( 
                         suspicious_begin_virtual_addr, suspicious_end_virtual_addr, angr_base_addr, bin_path, bof_func, hook_len, // args
                         vulnerable_virtual_addr); // results
-                    std::cout << "[detect overflow]vulnerable= "<< is_vulnerable << ", vulnerable_virtual_addr= " << vulnerable_virtual_addr << std::endl;
+
+                    is_constraints_solved = true;
+
+                    //std::cout << "[detect overflow]vulnerable= "<< is_vulnerable << ", vulnerable_virtual_addr= " << vulnerable_virtual_addr << std::endl;
                     if (is_vulnerable){ // check if overflow will be triggered on vulnerable addr when vulnerability is detected 
                         
                         // Set bp on vulnerable_addr // 
@@ -500,10 +543,14 @@ int main(int argc, char** argv)
                             CloseHandle(hProcess);
                         }
                     }
-                    repeated = true;
                     
                 } 
-                if (debugEvent.u.Exception.ExceptionRecord.ExceptionAddress == vulnerable_virtual_addr && repeated){
+                else if (debugEvent.u.Exception.ExceptionRecord.ExceptionAddress == vulnerable_virtual_addr && is_constraints_solved){
+                    // elapsed time
+                   
+                    //start = std::chrono::high_resolution_clock::now();
+
+
                     std::cout<<"bp hitted on vul addr" << std::endl;
                     // Set bp on vulnerable address infinitely //
                     if (!WriteProcessMemory(hProcess, vulnerable_virtual_addr, &originalBpBytes[1], 1, NULL)) { // Restore the original byte
@@ -513,14 +560,13 @@ int main(int argc, char** argv)
                     ctx.EFlags |= 0x100; // set step mode
                     
 
-                    if (bof_func=="gets")
+                    if (!strcmp(bof_func,"gets"))
                         dump_memory(hProcess, (LPVOID)(uintptr_t)ctx.Rcx, 256); // rcx stores addr of buf // supposes largest len of stdin is 256
-                    else if (bof_func=="recv" || bof_func=="sprintf")
+                    else if (!strcmp(bof_func,"recv") || !strcmp(bof_func,"sprintf"))
                         dump_registers(&ctx);
-
-                    bool is_triggered = check_overflow_satisfiability(bin_path);
-
-                    std::cout<<"is_triggered " <<is_triggered<<std::endl;
+                    bool is_triggered = check_overflow_satisfiability();
+               
+                    //std::cout<<"is_triggered " <<is_triggered<<std::endl;
                     if (is_triggered){
                         // Set bp on err handler
                         if (!ReadProcessMemory(hProcess, err_handling_virtual_addr, &originalBpBytes[2], 1, NULL)) { 
@@ -566,7 +612,7 @@ int main(int argc, char** argv)
                     return 1;
                 }
             } else if (debugEvent.u.Exception.ExceptionRecord.ExceptionCode == EXCEPTION_SINGLE_STEP){ // Trigger bp on vulnerable addr infinitely                    
-                std::cout << "single step" << std::endl;
+                //std::cout << "single step" << std::endl;
                 if (!WriteProcessMemory(hProcess, vulnerable_virtual_addr, &breakpoint_opcode, 1, NULL)) { // reset bp
                     printf("Failed to set breakpoint\n");
                     CloseHandle(hProcess);
@@ -585,6 +631,11 @@ int main(int argc, char** argv)
                     printf("Failed to set thread context, error code %d\n", GetLastError());
                     return 1;
                 }
+
+                //auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::high_resolution_clock::now() - start);
+                //std::cout << "Elapsed time: " << duration.count() << " ms" << std::endl;
+                
+
             } else {
                 // Handle other exception types
                 //std::cout<<"exception code ="<< debugEvent.u.Exception.ExceptionRecord.ExceptionCode << std::endl;
@@ -601,5 +652,7 @@ int main(int argc, char** argv)
 
     DebugActiveProcessStop(pid);
     CloseHandle(hProcess);
+    Py_Finalize();
+
     return 0;
 }

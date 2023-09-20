@@ -19,5 +19,7 @@ Attach vulnerable process with defense tool
 [end_addr] is static address of ret instruction in vulnerable function.   
 [err_handling_addr] is static address of error handler in application.  
 
+delete tmp directory first before calling debugger, tmp is used to check if constraints solved
+
 ## Platform
 Windows only
