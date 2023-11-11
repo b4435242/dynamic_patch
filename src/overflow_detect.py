@@ -8,6 +8,7 @@ from decimal import *
 
 from angr.misc.ux import once
 import logging
+import time
 
 rip_pattern = 0xCCCCCCCCCCCCCCCC
 
@@ -37,12 +38,31 @@ class Bof_Aeg(object):
 
 	def hook_setup(self, state):
 		state.globals["hook_len"] = self.hook_len
-		if self.bof_func=="get":
-			self.project.hook(self.start_addr, procedure.gets()) # simprocedure
+		if self.bof_func=="gets":
+			#self.project.hook(self.start_addr, procedure.gets()) # simprocedure
+			self.project.hook_symbol('gets', procedure.gets())
 		elif self.bof_func=="recv":
 			self.project.hook(self.start_addr, procedure.recv, length=self.hook_len) # user hook
 		elif self.bof_func=="sprintf":
 			self.project.hook(self.start_addr, procedure.sprintf()) # simprocedure
+
+	def get_state(self, m, start_addr):
+		if self.bof_func=="gets":
+			state = self.project.factory.call_state(addr=start_addr, add_options={ # currently must start from the start of func
+				angr.options.CONSTRAINT_TRACKING_IN_SOLVER,
+				angr.options.SYMBOL_FILL_UNCONSTRAINED_MEMORY,
+				angr.options.SYMBOL_FILL_UNCONSTRAINED_REGISTERS
+				})
+			state.libc.max_gets_size = m
+			load_state.set_regs(state, regs)
+			load_state.set_stack(state, stack)
+			state.globals["hook_len"] = self.hook_len
+			simgr = self.project.factory.simgr(state, save_unconstrained=True)
+			
+			simgr.explore(step_func=self.check_mem_corruption)
+
+			if len(simgr.stashes['mem_corrupt'])>0:
+				return simgr.stashes['mem_corrupt'][0]
 
 	def is_unconstrained(self, m, constraints, start_addr):
 		
@@ -52,20 +72,22 @@ class Bof_Aeg(object):
 			
 			# Generate concretized input with constraints #
 			state = self.project.factory.entry_state()
-			constraints = constraints[:m+1]
+			constraints = constraints[:m]
 			for c in constraints:
 				state.solver.add(c)
 
 			buffer = self.state.posix.stdin.content[0][0]
 			concretized_buffer = state.solver.eval(buffer, cast_to=bytes)
 			#trim 
+			'''
 			print(concretized_buffer)
 			trim_index = 1
-			while concretized_buffer[-trim_index]==0:
+			while concretized_buffer[-trim_index]==0 or concretized_buffer[-trim_index]==245:
 				trim_index += 1
 			concretized_buffer = concretized_buffer[:-trim_index]
 
 			print(concretized_buffer)
+			'''
 			#IPython.embed()
 
 			# Check if it can find random address e.g. rip_pattern=0xcccccccc here #
@@ -75,11 +97,14 @@ class Bof_Aeg(object):
 				angr.options.SYMBOL_FILL_UNCONSTRAINED_MEMORY,
 				angr.options.SYMBOL_FILL_UNCONSTRAINED_REGISTERS
 				})
+			state.libc.max_gets_size = m
 			load_state.set_regs(state, regs)
+			#load_state.set_stack(state, stack)
 			state.globals["hook_len"] = self.hook_len
 			simgr = self.project.factory.simgr(state)
-			
+
 			simgr.explore(find=rip_pattern)
+			
 			return len(simgr.found)>0
 		elif self.bof_func=="recv":
 			''' symbolic_input here means recv buf '''
@@ -147,10 +172,12 @@ class Bof_Aeg(object):
 			# Sort the constraints based on the byte index
 			constraints = sorted(constraints, key=get_byte_index)
 
+
 			# binary search
 			n = len(constraints)
 			l = 0
-			r = n-1
+			#r = n-1
+			r = self.state.libc.max_gets_size
 			while l<=r:
 				m = (l+r)/2
 				m = int(m)
@@ -160,10 +187,19 @@ class Bof_Aeg(object):
 				else:
 					l = m+1
 			
+			#exact_unconstrained_state = self.get_state(l, start_addr)
+			#return exact_unconstrained_state.solver.constraints
+			
+			
 			# drop 8 last bytes constraints cuz it is a specific random address
-			if r>=8:
-				r -= 8
+			#if r>=8:
+			#	r -= 8
+			
+			exact_unconstrained_state = self.get_state(l, start_addr)
+			#IPython.embed()
+			return exact_unconstrained_state.solver.constraints[:-8] # without rip pattern
 			return constraints[:l+1] # originallly r+1?
+			
 		elif self.bof_func=="recv":
 			# get r8 (size) constraints with <= op
 			def extract_constraints():
@@ -238,7 +274,14 @@ class Bof_Aeg(object):
 		print("active {}".format(simgr.active))
 		#for path in simgr.active:
 		#	if path.addr==0x18001bc74:
-
+		
+		'''visited = set()
+		for path in simgr.active:
+			if path.addr not in visited:
+				visited.add(path.addr)
+			else:
+				simgr.active.remove(path)
+				simgr.drop(stash='active')'''
 
 		if len(simgr.unconstrained):
 			for path in simgr.unconstrained:
@@ -264,6 +307,8 @@ class Bof_Aeg(object):
 	
 
 	def find_buf_overflow(self, start_addr, end_addr, regs, stack):
+		#start_time = int(time.time()*1000)
+
 		#symsize = claripy.BVS('stdin_size', 64)
 		self.start_addr = start_addr
 		self.end_addr = end_addr
@@ -287,7 +332,7 @@ class Bof_Aeg(object):
 
 		state.libc.buf_symbolic_bytes = 0x100
 		state.libc.max_str_len = 0x100
-		state.libc.max_gets_size = 0x100 
+		state.libc.max_gets_size = 256
 		state.libc.max_packet_size = 0x1000+0x100 # nginx case: buffer size + overflow 
 		
 		# For sprintf func and recv
@@ -324,6 +369,9 @@ class Bof_Aeg(object):
 			self.overflow = False
 			return 
 
+		#print("reproduce time={}".format(int(time.time()*1000)-start_time))
+		#start_time = int(time.time()*1000)
+
 
 		unconstrained_state = simgr.stashes['mem_corrupt'][-1]
 		unconstrained_state.solver.simplify()
@@ -334,6 +382,7 @@ class Bof_Aeg(object):
 		minimum_constraints = self.find_minimum_constraints(constraints, start_addr)
 		self.minimum_constraints = minimum_constraints
 
+		#print("convergence time={}".format(int(time.time()*1000)-start_time))
 
 		print("constraints = {}".format(minimum_constraints))
 		#IPython.embed()
@@ -378,6 +427,7 @@ def main():
 	parser.add_argument("--regs", dest="regs")
 	parser.add_argument("--stack", dest="stack")
 	args = parser.parse_args()'''
+
 	if len(sys.argv) != 9:
 	  sys.exit("Not correct num of args")
 	global bin_path, regs, stack
@@ -400,5 +450,7 @@ def main():
 	#IPython.embed()
 	#print(simgr.mem_corrupt[0].addr)
 	
+	
 if __name__ == "__main__":
 	main()
+

@@ -485,8 +485,8 @@ int main(int argc, char** argv)
     }
 
     // elapsed time 
-    //auto start = std::chrono::high_resolution_clock::now();
-    //auto end = start;
+    auto start = std::chrono::high_resolution_clock::now();
+    auto end = start;
 
     // 1. Run overflow detection once //
     // 2. Run overflow triggered infinite times if finding a vulnerability in 1. //
@@ -529,7 +529,7 @@ int main(int argc, char** argv)
 
                     is_constraints_solved = true;
 
-                    //std::cout << "[detect overflow]vulnerable= "<< is_vulnerable << ", vulnerable_virtual_addr= " << vulnerable_virtual_addr << std::endl;
+                    std::cout << "[detect overflow]vulnerable= "<< is_vulnerable << ", vulnerable_virtual_addr= " << vulnerable_virtual_addr << std::endl;
                     if (is_vulnerable){ // check if overflow will be triggered on vulnerable addr when vulnerability is detected 
                         
                         // Set bp on vulnerable_addr // 
@@ -548,7 +548,7 @@ int main(int argc, char** argv)
                 else if (debugEvent.u.Exception.ExceptionRecord.ExceptionAddress == vulnerable_virtual_addr && is_constraints_solved){
                     // elapsed time
                    
-                    //start = std::chrono::high_resolution_clock::now();
+                    start = std::chrono::high_resolution_clock::now();
 
 
                     std::cout<<"bp hitted on vul addr" << std::endl;
@@ -632,8 +632,8 @@ int main(int argc, char** argv)
                     return 1;
                 }
 
-                //auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::high_resolution_clock::now() - start);
-                //std::cout << "Elapsed time: " << duration.count() << " ms" << std::endl;
+                auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::high_resolution_clock::now() - start);
+                std::cout << "Elapsed time: " << duration.count() << " ms" << std::endl;
                 
 
             } else {

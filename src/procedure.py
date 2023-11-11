@@ -15,11 +15,11 @@ class gets(angr.SimProcedure):
 	# pylint:disable=arguments-differ
 
 	def run(self, dst):
-		if once("gets_warning"):
-			_l.warning(
-				"The use of gets in a program usually causes buffer overflows. You may want to adjust "
-				"SimStateLibc.max_gets_size to properly mimic an overflowing read."
-			)
+		#if once("gets_warning"):
+		#	_l.warning(
+		#		"The use of gets in a program usually causes buffer overflows. You may want to adjust "
+		#		"SimStateLibc.max_gets_size to properly mimic an overflowing read."
+		#	)
 		# Manually assign params value from calling convetion
 		dst = self.state.regs.rcx
 
@@ -43,6 +43,8 @@ class gets(angr.SimProcedure):
 				if self.state.solver.is_true(data == b"\n"):
 					break
 			self.state.memory.store(dst + count, b"\0")
+
+			#self.jump(self.state.addr+self.state.globals["hook_len"])
 			return dst
 
 		# case 2: the data is symbolic, the newline could be anywhere. Read the maximum number of bytes
@@ -69,6 +71,7 @@ class gets(angr.SimProcedure):
 			end_address = end_address.annotate(MultiwriteAnnotation())
 			self.state.memory.store(end_address, b"\0")
 
+			#self.jump(self.state.addr+self.state.globals["hook_len"])
 			return dst
 
 

@@ -36,19 +36,19 @@ def satisfiable(constraints, symbolic_input, concrete_input, bof_func):
 
 
 
-	'''if satisfiable:
+	if satisfiable:
 		print("{} satisfies the stdin constraints.".format(input))
 	else:
 		print("{} does not satisfy the stdin constraints.".format(input))	
 
-	with open("tmp/satisfiabililty", "w") as f:
+	'''with open("tmp/satisfiabililty", "w") as f:
 		f.write(str(satisfiable))'''
 
 	return satisfiable
 
 
 def check_satisfiability():
-	#start_time = int(time.time()*1000)
+	start_time = int(time.time()*1000)
 
 	constraints = load_state.load_constraints("tmp/constraints")
 	symbolic_input = load_state.load_symbolic_vars("tmp/symbolic_vars")
@@ -67,8 +67,8 @@ def check_satisfiability():
 
 	res = satisfiable(constraints, symbolic_input, concrete_input, bof_func)
 	
-	#end_time = int(time.time()*1000)
-	#print("time for checking={}ms".format(end_time-start_time))
+	end_time = int(time.time()*1000)
+	print("time for checking={}ms".format(end_time-start_time))
 
 	return res
 
