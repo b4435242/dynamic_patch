@@ -1,6 +1,8 @@
 @echo off
 
+
 :: angr
+(
 pip install --no-index --find-links setuptools setuptools
 
 cd cppheaderparser\CppHeaderParser-2.7.4 
@@ -14,6 +16,7 @@ cd ..
 cd future\future-0.18.3
 python setup.py install
 cd ..
+)
 
 pip install --no-index --find-links angr angr
 
