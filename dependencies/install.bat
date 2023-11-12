@@ -23,4 +23,4 @@ pip install --no-index --find-links angr angr
 :: IPython
 pip install --no-index --find-links IPython IPython
 
-exit /b 0
+pause
