@@ -101,8 +101,8 @@ class sprintf(FormatParser):
 		# Originally assign from calling convetion rcx and rdx
 
 		va_arg = self.va_arg
-		fmt = va_arg("void*") #fmt = self.state.regs.rdx
-		dst_ptr = va_arg("void*") #dst_ptr = self.state.regs.rcx
+		#fmt = va_arg("void*") #fmt = self.state.regs.rdx
+		#dst_ptr = va_arg("void*") #dst_ptr = self.state.regs.rcx
 		# Only support 2 arg of fmt now for symbolic execution with x86-64 cc(calling convention) rcx rdx r8 r9
 		if 'r8' in self.state.globals:
 			self.state.regs.r8 = self.state.globals['r8']

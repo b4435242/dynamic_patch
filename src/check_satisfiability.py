@@ -30,7 +30,7 @@ def satisfiable(constraints, symbolic_input, concrete_input, bof_func):
 		# symbolic_input is a symbolic var of size in the constraint
 		# form a new constraint of symbolic_input==concrete_input to test satisfiability
 		
-		#print(concrete_input)
+		print("keyValue = {}".format(concrete_input))
 		constraints += [symbolic_input==concrete_input]
 		satisfiable = solver.satisfiable(extra_constraints=constraints) #[symbolic_input==concrete_input]
 
@@ -52,7 +52,7 @@ def check_satisfiability():
 
 	constraints = load_state.load_constraints("tmp/constraints")
 	symbolic_input = load_state.load_symbolic_vars("tmp/symbolic_vars")
-	#print("constraints={}".format(constraints))
+	print("constraints={}".format(constraints))
 	bof_func, reg_id = load_state.load_analysis("tmp/analysis")
 	if bof_func=="gets":
 		concrete_input = load_state.load_stdin_buf("tmp/concrete_input")

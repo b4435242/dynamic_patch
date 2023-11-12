@@ -6,27 +6,16 @@ set PATH dependencies\winlibs-x86_64-posix-seh-gcc-13.1.0-llvm-16.0.5-mingw-w64u
 set PATH dependencies\winlibs-x86_64-posix-seh-gcc-13.1.0-llvm-16.0.5-mingw-w64ucrt-11.0.0-r5\mingw64\lib  
 g++ .\debugger.cpp -o .\debugger -g  
 
+## MSYS2
+execute dependencies/msys2-x86_64-20230526
 
 ## Python
-execute python-3.11.4-amd64
-## angr
-mkdir setuptools && pip download setuptools
-pip install --no-index --find-links setuptools setuptools
+execute dependencies/python-3.11.4-amd64
 
-mkdir cppheaderparser && cd cppheaderparser && pip download CppHeaderParser  
-tar -zxvf cppheaderparser\CppHeaderParser-2.7.4.tar.gz --directory cppheaderparser  
-cd cppheaderparser\CppHeaderParser-2.7.4 && python setup.py install  
+## Module
+### angr, IPython
+With network: dependencies/download.bat
+Install offline: dependencies/install.bat
 
-mkdir mulpyplexer && cd mulpyplexer && pip download mulpyplexer  
-tar -zxvf mulpyplexer\mulpyplexer-0.09.tar.gz --directory mulpyplexer  
-cd mulpyplexer\mulpyplexer-0.09 && python setup.py install  
 
-mkdir future && cd future && pip download future  
-tar -zxvf future\future-0.18.3.tar.gz --directory future  
-cd future\future-0.18.3 && python setup.py install  
 
-mkdir angr && cd angr && pip download angr  
-pip install --no-index --find-links angr angr  
-## IPython
-mkdir IPython && cd IPython && pip download IPython  
-pip install --no-index --find-links IPython IPython   
