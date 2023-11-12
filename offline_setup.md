@@ -13,8 +13,8 @@ execute dependencies/msys2-x86_64-20230526
 execute dependencies/python-3.11.4-amd64
 
 ## Module
-### angr, IPython
-With network: dependencies/download.bat
+angr, IPython  
+With network: dependencies/download.bat  
 Install offline: dependencies/install.bat
 
 
