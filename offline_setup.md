@@ -14,8 +14,8 @@ execute dependencies/python-3.11.4-amd64
 
 ## Module
 angr, IPython  
-With network: dependencies/download.bat  
-Install offline: dependencies/install.bat
+With network: cd dependencies && Start-Process download.bat  
+Install offline: cd dependencies && Start-Process install.bat
 
 
 
