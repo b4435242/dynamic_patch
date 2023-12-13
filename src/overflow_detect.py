@@ -9,6 +9,7 @@ from decimal import *
 from angr.misc.ux import once
 import logging
 import time
+import os
 
 rip_pattern = 0xCCCCCCCCCCCCCCCC
 
@@ -431,14 +432,17 @@ def main():
 	if len(sys.argv) != 9:
 	  sys.exit("Not correct num of args")
 	global bin_path, regs, stack
-	bin_path = str(sys.argv[1])
-	bof_func = str(sys.argv[2])
-	hook_len = int(sys.argv[3])
-	regs = str(sys.argv[4])
-	stack = str(sys.argv[5])
-	start_addr = int(sys.argv[6], 16)
-	end_addr = int(sys.argv[7], 16) 
-	base_addr = int(sys.argv[8], 16)
+	try:
+		bin_path = os.path.abspath(str(sys.argv[1]))
+		bof_func = str(sys.argv[2])
+		hook_len = int(sys.argv[3])
+		regs = os.path.abspath(str(sys.argv[4]))
+		stack = os.path.abspath(str(sys.argv[5]))
+		start_addr = int(sys.argv[6], 16)
+		end_addr = int(sys.argv[7], 16)
+		base_addr = int(sys.argv[8], 16)
+	except (ValueError, OSError) as e:
+		sys.exit(f"Error in input arguments: {e}")
 
 	#p = angr.Project(args.bin_path)
 	global bof_aeg
